@@ -1,0 +1,29 @@
+# XcodeGen spec — the source of truth for the Xcode project.
+# Run `xcodegen` to (re)generate Echo.xcodeproj identically on any machine.
+name: Echo
+options:
+  bundleIdPrefix: com.rannyeri
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+targets:
+  Echo:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+        optional: true          # test clip may not be present on a fresh clone
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.rannyeri.echo
+        MARKETING_VERSION: "0.0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: YES
+        # Background audio keeps Echo alive to play during a run / locked screen.
+        INFOPLIST_KEY_UIBackgroundModes: audio
+        INFOPLIST_KEY_CFBundleDisplayName: Echo
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: "1"        # iPhone
+        SWIFT_VERSION: "5.9"

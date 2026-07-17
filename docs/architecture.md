@@ -1,7 +1,7 @@
 # Echo — architecture & design
 
-> Design-first. This doc is the diagram + the scopes + the one decision that's
-> yours. Code comes after you've seen the shape.
+> Design-first. This doc is the diagram + the scopes + the decisions.
+> **Decisions locked 2026-07-17** are marked ✅.
 
 ## 1. The problem, precisely
 
@@ -29,12 +29,13 @@ never synthesizes speech. The division of labor:
 
 ```mermaid
 flowchart LR
-  subgraph Mac
+  subgraph Mac["Mac — repo: core"]
     A[Claude session<br/>coordinator] --> B[nic-say.sh]
     B --> C[Kokoro renders<br/>voice clip .wav]
+    C --> S[echo-send<br/>+ echo.conf]
   end
-  C -->|Tailscale| D[Echo on iPhone]
-  subgraph iPhone
+  S -->|Tailscale| D[Echo on iPhone]
+  subgraph iPhone["iPhone — repo: echo"]
     D --> E{music playing?}
     E -->|yes| F[duck Spotify down]
     F --> G[play Nic's clip]
@@ -47,41 +48,55 @@ The transport is **Tailscale** — your Mac and phone are already on the same
 private network (that's the `100.x` address the iPad used for the dev server), so
 no cloud, no accounts, health/finance audio never leaves your devices.
 
-## 3. THE decision that's yours — how the clip reaches the phone
+## 3. Delivery — how the clip reaches the phone ✅
 
-iOS is strict about background apps: a backgrounded app normally gets suspended,
-so it can't just sit there listening forever. Four ways to deal with that:
+iOS suspends background apps, so an app can't just sit there listening forever.
+Options considered: (A) phone runs a listener — dies when backgrounded;
+(B) push wakes it — needs a paid Apple Developer account on a free cert;
+(C) kept alive by playing silent audio; (D) you open it for the run.
 
-| Option | How it works | Cost |
-|---|---|---|
-| **A. Phone listens** | Echo runs a mini web server; Mac POSTs clips | iOS suspends it when backgrounded → unreliable while your phone's in your pocket |
-| **B. Push wakes it** | Mac sends a push; iOS wakes Echo to fetch + play | Push on a *free* sideload cert is painful — usually needs a paid Apple Developer account |
-| **C. Kept alive by audio** | Echo plays silent audio to stay awake, holds a live link to the Mac | Small battery cost; slightly hacky — but fine for a sideloaded app |
-| **D. You open it for the run** | You launch Echo when you head out; it stays live (via C) for the session; you close it after | Requires the one deliberate tap — matches how you actually use it |
-
-**My recommendation: D built on C.** You already *decide* to go for a run, so
-opening Echo at the start is natural — no always-on infrastructure, no paid
-account, no push plumbing. Echo keeps itself alive with the background-audio
-trick for the length of the run and plays whatever the Mac sends. If you later
-want it always-on (announcements even when you didn't open it), that's a **v2**
-that adds push (Option B) — a real feature, but not needed to get you running
-this week.
-
-*Your call:* is "open Echo when I head out" acceptable as the model, or do you
-want always-on from day one (accepting the push/paid-account detour)?
+**✅ Decided: open-on-run (D), built on the keep-alive trick (C).** You open Echo
+when you head out; it stays live for the session and plays whatever the Mac
+sends. No push, no paid account, no always-on infrastructure. Always-on delivery
+(Echo speaks without being opened) is an explicit **v2** that adds push (B).
 
 ## 4. Scopes (build order)
 
 - **v0 — proof it ducks.** Echo app that, on a button tap, ducks Spotify, plays
   a bundled test clip, restores. Proves the one hard iOS behavior in isolation.
-- **v1 — the real loop.** Mac renders Kokoro audio to a file and sends it over
-  Tailscale; Echo receives and plays it ducked, staying alive through a locked
-  screen / a run (Option C). Hook into `nic-say.sh` so the coordinator's voice
-  goes to the phone when Echo is connected.
+  *(scaffolded — the code in this repo now)*
+- **v1 — the real loop.** Mac renders Kokoro audio and sends it over Tailscale
+  (`core/voice/echo-send`); Echo receives and plays it ducked, staying alive
+  through a locked screen / a run (C). Hook into `nic-say.sh` so the
+  coordinator's voice reaches the phone when Echo is connected.
 - **v2 — always-on.** Push-triggered delivery so Echo speaks without being
   opened first. Deferred until v1 earns its keep.
 
-## 5. Build & deploy reality (so there are no surprises)
+## 5. Reproducibility contract (requirement, 2026-07-17)
+
+> *"Clone **core** and **echo**, set them both up, and you get the same working
+> system."* This is a hard requirement, held to the same bar as core's
+> integrity/backup discipline. Concretely:
+
+- **No personal state in git.** Every value that's *yours* — the Mac's Tailscale
+  address, the shared token, signing identity — lives in a **template** you copy
+  and fill (`echo.conf.example` → `echo.conf`, gitignored). Same pattern on the
+  core side (`core/voice/echo.conf`). A fresh clone has *placeholders*, never
+  secrets.
+- **The Xcode project is generated, not committed.** We describe the app in a
+  small `project.yml` and let **XcodeGen** regenerate an identical
+  `Echo.xcodeproj` on any machine (`brew install xcodegen && xcodegen`). No
+  fragile hand-edited project file drifting between clones — the spec is the
+  source of truth, so everyone gets the same build settings, entitlements, and
+  bundle id.
+- **Toolchain pinned + documented.** iOS deployment target and the required
+  Xcode/tool versions are written down (`.tool-versions` / README), so "it built
+  for me" means "it builds for you."
+- **The two repos are a matched pair.** Echo (phone) and core's `echo-send`
+  (Mac) share one token and one protocol, both documented here and mirrored in
+  each repo's setup. Neither works alone; together they reproduce the loop.
+
+## 6. Build & deploy reality (so there are no surprises)
 
 - Echo is a Swift/SwiftUI app built in **Xcode**, sideloaded like Pulso: free
   developer cert, **re-signed every ~7 days** (⌘R). Two apps to re-sign now
@@ -89,12 +104,14 @@ want always-on from day one (accepting the push/paid-account detour)?
 - I can write all the code — the Swift app, the Mac-side sender, the repo, the
   docs. **Building, signing, and running it needs your hands in Xcode**, exactly
   like Pulso's cycle. I can't compile or sign an iOS app from here.
-- Open-source repo under your GitHub account (like the way Pulso is its own
-  thing), MIT-style license unless you prefer otherwise.
+- ✅ Open-source repo under your GitHub account, **public**, named **`echo`**,
+  MIT license.
 
-## 6. Open questions for you
+## 7. Open questions
 
-1. Delivery model: **open-on-run (D)** — recommended — or always-on from day one?
-2. Repo: **public** (open-source, as you said) and named **`echo`** — confirm?
-3. Anything beyond voice you want Echo to hold "in the future" (you hinted it
-   might carry *all* communication features)? Naming that now shapes v1's seams.
+1. ✅ Delivery model — open-on-run.
+2. ✅ Repo — public, named `echo`.
+3. **Still open:** you hinted Echo might carry *all* communication features
+   later, not just voice. If you can name even loosely what those are (text
+   notifications? two-way replies? a lane dashboard?), I'll leave the v1 seams in
+   the right places so v2+ doesn't fight the foundation.

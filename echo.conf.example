@@ -1,0 +1,13 @@
+# echo.conf.example — copy to echo.conf (gitignored) and fill in your values.
+# Used from v1 on, when Echo receives clips from the Mac over Tailscale.
+# The matching values live on the Mac side in core/voice/echo.conf.
+
+# Your Mac's Tailscale IPv4 (run `tailscale ip -4` on the Mac).
+MAC_HOST=100.0.0.0
+
+# Port Echo listens on for incoming voice clips.
+ECHO_PORT=8790
+
+# Shared secret — must be identical to the token in core/voice/echo.conf.
+# Generate one with: openssl rand -hex 24
+SHARED_TOKEN=change-me

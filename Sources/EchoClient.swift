@@ -22,9 +22,12 @@ final class EchoClient: ObservableObject {
     @Published var isListening = false
     @Published var pending: [Clip] = []
 
-    private let ducker = AudioDucker()
+    // Lazy so launching the app touches neither the audio nor the network stack —
+    // both are built only when you actually start listening / play, keeping the
+    // first render instant (a slow launch is what makes sideloaded apps blank).
+    private lazy var ducker = AudioDucker()
     private var task: Task<Void, Never>?
-    private var session = EchoClient.makeSession()
+    private lazy var session = EchoClient.makeSession()
 
     /// A connection-reuse-free session that waits out brief drops. Rebuilt on
     /// every error so a half-dead socket is never retried.

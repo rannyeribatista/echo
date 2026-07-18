@@ -111,7 +111,31 @@ sends. No push, no paid account, no always-on infrastructure. Always-on delivery
 
 1. ✅ Delivery model — open-on-run.
 2. ✅ Repo — public, named `echo`.
-3. **Still open:** you hinted Echo might carry *all* communication features
-   later, not just voice. If you can name even loosely what those are (text
-   notifications? two-way replies? a lane dashboard?), I'll leave the v1 seams in
-   the right places so v2+ doesn't fight the foundation.
+3. Partly answered — see §8: he started naming the richer surface (history,
+   transport controls, tags, decision/action surfacing).
+
+## 8. v2 — the listening surface (his feature ideas, 2026-07-17)
+
+From using v1, Rannyeri wants Echo to become a richer *listening surface*, not
+just a fire-and-forget player. Captured for design; **not yet built** — build
+order when greenlit: history list → now-playing widget → tags → (maybe) actions.
+
+- **Audio history — one item per clip.** A list where each received audio is its
+  own row, clearly one audio. *Feasible.* The concern "we delete the files
+  quickly" is about the **server outbox** (deleted right after sending); the
+  **phone keeps what it received** — we retain the last N clips (display text +
+  the audio file) so they list and replay even after playing.
+- **Now-playing widget + transport.** While a clip plays: **pause · stop ·
+  restart (back to start)** and a **progress bar** at the bottom showing
+  position. *Feasible* — `AVAudioPlayer` exposes `play/pause/currentTime/duration`
+  and a SwiftUI scrubber binds to it. **First v2 build candidate.**
+- **Context tags per clip.** Small chips so he knows what a clip is about before
+  playing (MVP / personal / system / …). *Feasible* — the Mac sends a tag with
+  each clip (an `X-Echo-Tag` header set by the coordinator / echo_push); the app
+  renders it as a chip. Needs the Mac side to classify/label clips.
+- **Actionable / decision surfacing.** If a clip carries a decision (A vs B) or an
+  action for him, show it on the row as tappable options. *Exploratory* — he's
+  unsure yet. Needs structured metadata from the Mac (a decision/action payload
+  alongside the audio) and is the first real step toward **two-way** — where
+  voice hands off to on-screen interaction — so design it deliberately, not by
+  accident.

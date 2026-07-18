@@ -72,6 +72,7 @@ final class EchoClient: ObservableObject {
         }
         isListening = true
         status = "Listening…"
+        ducker.beginListening()          // keep-alive so playback works in the background
         task = Task { await loop() }
     }
 
@@ -80,6 +81,7 @@ final class EchoClient: ObservableObject {
         task = nil
         session.invalidateAndCancel()
         session = EchoClient.makeSession()
+        ducker.endListening()            // stop keep-alive + release the audio session
         isListening = false
         status = "Stopped"
     }

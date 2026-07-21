@@ -4,6 +4,7 @@ struct ContentView: View {
     @StateObject private var client = EchoClient()
     @AppStorage("autoPlay") private var autoPlay = true
     @State private var showSettings = false
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         NavigationStack {
@@ -54,13 +55,32 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            // Foreground watchdog: if iOS suspended the poll loop while
+            // backgrounded, restart it instead of showing a dead "listening".
+            .onChange(of: scenePhase) { phase in
+                if phase == .active { client.appBecameActive() }
+            }
         }
     }
 
     private var statusCard: some View {
         VStack(spacing: 6) {
-            Text(client.isListening ? "🟢" : "⚪️").font(.system(size: 44))
-            Text(client.status).foregroundStyle(.secondary)
+            Text(stateEmoji).font(.system(size: 44))
+            Text(client.statusText)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        }
+    }
+
+    /// Green only when the connection is genuinely healthy — yellow/red mean
+    /// what the label under them says.
+    private var stateEmoji: String {
+        guard client.isListening else { return "⚪️" }
+        switch client.state {
+        case .degraded: return "🟡"
+        case .error: return "🔴"
+        default: return "🟢"
         }
     }
 }

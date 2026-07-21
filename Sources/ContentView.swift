@@ -25,23 +25,18 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
 
-                if client.pending.isEmpty {
+                if client.clips.isEmpty {
+                    Spacer()
+                    Text("No messages in the last 24 hours.")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                 } else {
-                    List(client.pending) { clip in
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(clip.text).lineLimit(2)
-                                Text(clip.receivedAt, style: .time)
-                                    .font(.caption).foregroundStyle(.secondary)
+                    // 24h history, newest first. Tap any row to (re)play it.
+                    List {
+                        Section("Last 24 hours") {
+                            ForEach(client.clips) { clip in
+                                ClipRow(clip: clip) { client.play(clip) }
                             }
-                            Spacer()
-                            Button {
-                                client.play(clip)
-                            } label: {
-                                Image(systemName: "play.circle.fill").font(.title2)
-                            }
-                            .buttonStyle(.plain)
                         }
                     }
                     .listStyle(.plain)
@@ -82,5 +77,43 @@ struct ContentView: View {
         case .error: return "🔴"
         default: return "🟢"
         }
+    }
+}
+
+/// One history row: pulsing dot while unplayed, dimmed once played.
+private struct ClipRow: View {
+    let clip: Clip
+    let play: () -> Void
+
+    var body: some View {
+        Button(action: play) {
+            HStack(spacing: 12) {
+                if clip.playedAt == nil { PulsingDot() }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(clip.text).lineLimit(2)
+                    Text(clip.receivedAt, style: .time)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "play.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(.tint)
+            }
+        }
+        .buttonStyle(.plain)
+        .opacity(clip.playedAt == nil ? 1 : 0.45)
+    }
+}
+
+private struct PulsingDot: View {
+    @State private var dim = false
+
+    var body: some View {
+        Circle()
+            .fill(Color.accentColor)
+            .frame(width: 8, height: 8)
+            .opacity(dim ? 0.25 : 1)
+            .animation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true), value: dim)
+            .onAppear { dim = true }
     }
 }

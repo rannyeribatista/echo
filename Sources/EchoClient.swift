@@ -1,12 +1,14 @@
 import Foundation
 import SwiftUI
 
-/// One received voice message.
-struct Clip: Identifiable {
-    let id = UUID()
+/// One received voice message. Codable because the last 24 hours of these
+/// persist across launches (ClipStore).
+struct Clip: Identifiable, Codable, Equatable {
+    let id: UUID
     let text: String        // what Nic says (sent by the Mac for display)
-    let fileURL: URL        // the downloaded audio, in a temp file
+    let fileName: String    // audio file inside ClipStore's directory
     let receivedAt: Date
+    var playedAt: Date?     // nil = unplayed (the pulsing dot)
 }
 
 /// Connection health, shown honestly in the UI. The loop NEVER dies on its
@@ -30,9 +32,15 @@ final class EchoClient: ObservableObject {
     @Published var state: ConnState = .idle
     @Published var isPlaying = false
     @Published var isListening = false
-    @Published var pending: [Clip] = []
+    /// Newest-first history of the last 24 hours, persisted across launches.
+    @Published var clips: [Clip] = []
 
     let log = EchoLog.shared
+    private let store = ClipStore()
+
+    init() {
+        clips = store.purge(store.load())
+    }
 
     // Lazy so launching the app touches neither the audio nor the network stack —
     // both are built only when you actually start listening / play, keeping the
@@ -80,13 +88,15 @@ final class EchoClient: ObservableObject {
             ? true : UserDefaults.standard.bool(forKey: "autoPlay")
     }
 
+    var unplayedCount: Int { clips.filter { $0.playedAt == nil }.count }
+
     /// The one line the main screen shows.
     var statusText: String {
         if isPlaying { return "Playing…" }
         switch state {
         case .idle: return "Idle"
         case .listening:
-            return pending.isEmpty ? "Listening…" : "\(pending.count) waiting — tap to play"
+            return unplayedCount == 0 ? "Listening…" : "\(unplayedCount) waiting — tap to play"
         case .degraded(let why): return why
         case .error(let why): return why
         }
@@ -132,6 +142,8 @@ final class EchoClient: ObservableObject {
     /// it while backgrounded — restart it instead of showing a dead "listening".
     func appBecameActive() {
         guard isListening else { return }
+        clips = store.purge(clips)               // roll the 24h window forward
+        store.save(clips)
         let stalled = Date().timeIntervalSince(lastPollAt)
         if stalled > 90 {
             log.add("watchdog: poll loop stalled \(Int(stalled))s — restarting")
@@ -159,11 +171,10 @@ final class EchoClient: ObservableObject {
                     fails = 0
                     recover()
                     log.add("clip received: \(clip.text.prefix(48))")
-                    if autoPlay {
-                        play(clip)
-                    } else {
-                        pending.insert(clip, at: 0)
-                    }
+                    clips.insert(clip, at: 0)
+                    clips = store.purge(clips)
+                    store.save(clips)
+                    if autoPlay { play(clip) }
                 case .empty:
                     fails = 0
                     recover()                    // 204 = healthy, nothing to play
@@ -227,22 +238,30 @@ final class EchoClient: ObservableObject {
             // Text is percent-encoded on the Mac so accents/emoji survive the header.
             let raw = http.value(forHTTPHeaderField: "X-Echo-Text") ?? ""
             let text = raw.removingPercentEncoding ?? (raw.isEmpty ? "Voice message" : raw)
-            let tmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString + ".wav")
-            try data.write(to: tmp)
-            return .clip(Clip(text: text, fileURL: tmp, receivedAt: Date()))
+            let dest = store.newAudioURL()
+            try data.write(to: dest.url)
+            return .clip(Clip(id: UUID(), text: text, fileName: dest.fileName,
+                              receivedAt: Date(), playedAt: nil))
         default:
             return .unexpected(http.statusCode)
         }
     }
 
-    /// Play a clip now (ducking the music). Used by auto-play and by manual taps.
+    /// Play a clip now (ducking the music). Used by auto-play, manual taps,
+    /// and history replays. Marked played the moment playback starts — simplest
+    /// rule that survives interruptions.
     func play(_ clip: Clip) {
+        markPlayed(clip.id)
         isPlaying = true
-        ducker.play(url: clip.fileURL, title: clip.text) { [weak self] in
-            guard let self else { return }
-            self.isPlaying = false
-            self.pending.removeAll { $0.id == clip.id }
+        ducker.play(url: store.url(for: clip), title: clip.text) { [weak self] in
+            self?.isPlaying = false
         }
+    }
+
+    private func markPlayed(_ id: UUID) {
+        guard let i = clips.firstIndex(where: { $0.id == id }),
+              clips[i].playedAt == nil else { return }
+        clips[i].playedAt = Date()
+        store.save(clips)
     }
 }

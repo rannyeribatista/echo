@@ -6,9 +6,22 @@ import SwiftUI
 struct Clip: Identifiable, Codable, Equatable {
     let id: UUID
     let text: String        // what Nic says (sent by the Mac for display)
+    let lane: String        // which session sent it ("core", "studium", "home"…); "" = untagged
+    let label: String       // first words of the message — what the row shows
     let fileName: String    // audio file inside ClipStore's directory
+    let sentAt: Date?       // when the Mac rendered it (from the tag sidecar)
     let receivedAt: Date
     var playedAt: Date?     // nil = unplayed (the pulsing dot)
+
+    /// Rendered-on-the-Mac time when tagged, else arrival time — matters for
+    /// clips that sat queued on the Mac before the phone connected.
+    var displayedAt: Date { sentAt ?? receivedAt }
+
+    /// Fallback label when the Mac didn't send one (old server): the first
+    /// handful of words of the spoken text.
+    static func defaultLabel(for text: String) -> String {
+        text.split(separator: " ").prefix(10).joined(separator: " ")
+    }
 }
 
 /// Connection health, shown honestly in the UI. The loop NEVER dies on its
@@ -161,6 +174,14 @@ final class EchoClient: ObservableObject {
         case unexpected(Int)    // anything else the server shouldn't say
     }
 
+    /// Shape of the Mac's X-Echo-Meta sidecar JSON. Every field optional so a
+    /// partial tag still parses.
+    private struct ClipMeta: Decodable {
+        let lane: String?
+        let label: String?
+        let ts: Double?
+    }
+
     private func loop() async {
         var fails = 0
         while !Task.isCancelled {
@@ -238,9 +259,22 @@ final class EchoClient: ObservableObject {
             // Text is percent-encoded on the Mac so accents/emoji survive the header.
             let raw = http.value(forHTTPHeaderField: "X-Echo-Text") ?? ""
             let text = raw.removingPercentEncoding ?? (raw.isEmpty ? "Voice message" : raw)
+            // Tags ride an optional X-Echo-Meta header (percent-encoded JSON:
+            // lane / label / ts). Absent or malformed — an old server — falls
+            // back cleanly, so both directions stay backward-compatible.
+            var lane = "", label = "", sentAt: Date?
+            if let rawMeta = http.value(forHTTPHeaderField: "X-Echo-Meta"),
+               let json = rawMeta.removingPercentEncoding,
+               let meta = try? JSONDecoder().decode(ClipMeta.self, from: Data(json.utf8)) {
+                lane = meta.lane ?? ""
+                label = meta.label ?? ""
+                if let ts = meta.ts { sentAt = Date(timeIntervalSince1970: ts) }
+            }
+            if label.isEmpty { label = Clip.defaultLabel(for: text) }
             let dest = store.newAudioURL()
             try data.write(to: dest.url)
-            return .clip(Clip(id: UUID(), text: text, fileName: dest.fileName,
+            return .clip(Clip(id: UUID(), text: text, lane: lane, label: label,
+                              fileName: dest.fileName, sentAt: sentAt,
                               receivedAt: Date(), playedAt: nil))
         default:
             return .unexpected(http.statusCode)

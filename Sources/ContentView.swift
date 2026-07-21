@@ -89,10 +89,13 @@ private struct ClipRow: View {
         Button(action: play) {
             HStack(spacing: 12) {
                 if clip.playedAt == nil { PulsingDot() }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(clip.text).lineLimit(2)
-                    Text(clip.receivedAt, style: .time)
-                        .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        if !clip.lane.isEmpty { laneChip }
+                        Text(clip.displayedAt, style: .time)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text(clip.label).lineLimit(1)
                 }
                 Spacer()
                 Image(systemName: "play.circle.fill")
@@ -102,6 +105,15 @@ private struct ClipRow: View {
         }
         .buttonStyle(.plain)
         .opacity(clip.playedAt == nil ? 1 : 0.45)
+    }
+
+    private var laneChip: some View {
+        Text(clip.lane)
+            .font(.caption2.weight(.medium))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Color.accentColor.opacity(0.15)))
+            .foregroundStyle(.tint)
     }
 }
 

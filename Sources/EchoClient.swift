@@ -287,7 +287,8 @@ final class EchoClient: ObservableObject {
     func play(_ clip: Clip) {
         markPlayed(clip.id)
         isPlaying = true
-        ducker.play(url: store.url(for: clip), title: clip.text) { [weak self] in
+        // The label doubles as the lock-screen Now Playing title.
+        ducker.play(url: store.url(for: clip), title: clip.label) { [weak self] in
             self?.isPlaying = false
         }
     }

@@ -28,7 +28,7 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate {
     private let session = AVAudioSession.sharedInstance()
     private var keepAlive: AVAudioPlayer?
     private var player: AVAudioPlayer?
-    private var onFinish: (() -> Void)?
+    private var onFinish: ((Double) -> Void)?
     private var listening = false
 
     /// Diagnostics sink (wired to the on-device log ring). Defaults to print.
@@ -82,8 +82,10 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate {
 
     /// Duck other audio and play `url`; music restores when the clip ends —
     /// naturally, on error, or on interruption. `title` is what the lock screen
-    /// shows while the clip plays.
-    func play(url: URL, title: String = "Nic", onFinish: (() -> Void)? = nil) {
+    /// shows while the clip plays. `onFinish` receives the fraction of the clip
+    /// that had played when it ended (1 on natural completion) so the caller
+    /// can tell "heard" from "cut off at second 3".
+    func play(url: URL, title: String = "Nic", onFinish: ((Double) -> Void)? = nil) {
         // One clip at a time: a new clip finishes the current one first, so
         // back-to-back plays never stack duck activations.
         if player != nil { finishClip(restoringAudio: false) }
@@ -95,7 +97,7 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate {
             p = try AVAudioPlayer(contentsOf: url)
         } catch {
             log("unplayable clip — \(error.localizedDescription)")
-            onFinish?()
+            onFinish?(0)
             return
         }
         self.onFinish = onFinish
@@ -117,13 +119,26 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate {
 
     /// The single teardown path — every way a clip can end funnels here:
     /// natural completion, decode error, interruption, replacement, stop.
-    private func finishClip(restoringAudio: Bool = true) {
+    /// `completed` is true only on the delegate's natural-completion path
+    /// (AVAudioPlayer rewinds `currentTime` to 0 after finishing, so elapsed
+    /// time can't tell "played to the end" from "never started"); every other
+    /// exit reports how far playback actually got.
+    private func finishClip(restoringAudio: Bool = true, completed: Bool = false) {
+        let fraction: Double
+        if completed {
+            fraction = 1
+        } else if let p = player, p.duration > 0 {
+            fraction = min(p.currentTime / p.duration, 1)
+        } else {
+            fraction = 0
+        }
         player?.stop()
         player = nil
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil   // no stale "Nic" card
         if restoringAudio { restore() }
         let cb = onFinish
         onFinish = nil
-        cb?()
+        cb?(fraction)
     }
 
     /// Drop the duck so the music swells back, then re-arm listening. iOS only
@@ -154,7 +169,7 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ p: AVAudioPlayer, successfully flag: Bool) {
         DispatchQueue.main.async { [weak self] in
             guard let self, p === self.player else { return }  // ignore the keep-alive loop
-            self.finishClip()
+            self.finishClip(completed: true)
         }
     }
 
@@ -196,7 +211,7 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate {
             self.log("media services reset — rebuilding")
             self.player = nil
             self.keepAlive = nil
-            let cb = self.onFinish; self.onFinish = nil; cb?()
+            let cb = self.onFinish; self.onFinish = nil; cb?(0)   // orphaned player — elapsed unknowable
             if self.listening { self.beginListening() }
         }
     }
@@ -204,6 +219,7 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate {
     /// Lock-screen "what's playing" card. With a mixable session another app
     /// (Spotify) may keep ownership of the card — set it anyway; when Echo is
     /// the only audio (screen-off run, no music) it shows the clip label.
+    /// Cleared in `finishClip` so the card never outlives the clip.
     private func nowPlaying(title: String, duration: TimeInterval) {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = [
             MPMediaItemPropertyTitle: title,

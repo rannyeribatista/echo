@@ -282,14 +282,15 @@ final class EchoClient: ObservableObject {
     }
 
     /// Play a clip now (ducking the music). Used by auto-play, manual taps,
-    /// and history replays. Marked played the moment playback starts — simplest
-    /// rule that survives interruptions.
+    /// and history replays. Marked played only when it was actually *heard*:
+    /// natural completion, or ≥80% elapsed when it ended early (interruption,
+    /// stop, replacement) — a call at second 3 of a 30s clip keeps the dot.
     func play(_ clip: Clip) {
-        markPlayed(clip.id)
         isPlaying = true
         // The label doubles as the lock-screen Now Playing title.
-        ducker.play(url: store.url(for: clip), title: clip.label) { [weak self] in
+        ducker.play(url: store.url(for: clip), title: clip.label) { [weak self] fraction in
             self?.isPlaying = false
+            if fraction >= 0.8 { self?.markPlayed(clip.id) }
         }
     }
 

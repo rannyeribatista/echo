@@ -44,15 +44,27 @@ enum ConnState: Equatable {
 final class EchoClient: ObservableObject {
     @Published var state: ConnState = .idle
     @Published var isPlaying = false
+    /// True while the mini-player's clip is paused (isPlaying stays true — a
+    /// clip is still loaded, just not moving).
+    @Published var isPaused = false
     @Published var isListening = false
+    /// The clip in the mini-player: non-nil from play() until it finishes.
+    @Published var nowPlayingClip: Clip?
+    @Published var playbackTime: TimeInterval = 0
+    @Published var playbackDuration: TimeInterval = 0
     /// Newest-first history of the last 24 hours, persisted across launches.
     @Published var clips: [Clip] = []
 
     let log = EchoLog.shared
     private let store = ClipStore()
+    /// Monotonic ticket for play(): lets a finish callback recognize it has
+    /// been superseded by a newer play, so it never clears the newer clip's
+    /// mini-player state.
+    private var playToken = 0
 
     init() {
         clips = store.purge(store.load())
+        store.save(clips)                    // persist the pruned index too
     }
 
     // Lazy so launching the app touches neither the audio nor the network stack —
@@ -61,6 +73,10 @@ final class EchoClient: ObservableObject {
     private lazy var ducker: AudioDucker = {
         let d = AudioDucker()
         d.log = { [weak self] msg in self?.log.add("audio: \(msg)") }
+        d.onProgress = { [weak self] time, duration in
+            self?.playbackTime = time
+            self?.playbackDuration = duration
+        }
         return d
     }()
     private var task: Task<Void, Never>?
@@ -105,7 +121,7 @@ final class EchoClient: ObservableObject {
 
     /// The one line the main screen shows.
     var statusText: String {
-        if isPlaying { return "Playing…" }
+        if isPlaying { return isPaused ? "Paused" : "Playing…" }
         switch state {
         case .idle: return "Idle"
         case .listening:
@@ -127,13 +143,16 @@ final class EchoClient: ObservableObject {
             return
         }
         guard task == nil else { return }        // already listening
+        prune()                                  // roll the 24h window before showing the list as live
         isListening = true
         state = .listening
         log.add("listening started → \(host):\(port)")
         // Keep-alive so playback works in the background. If it fails, say so —
-        // the old silent print() here was one way "listening" lied.
-        if !ducker.beginListening() {
-            state = .degraded("Audio keep-alive failed — background playback may stop.")
+        // the old silent print() here was one way "listening" lied. (The result
+        // arrives via callback now: session activation runs off-main.)
+        ducker.beginListening { [weak self] ok in
+            guard let self, !ok, self.isListening else { return }
+            self.state = .degraded("Audio keep-alive failed — background playback may stop.")
         }
         task = Task { await loop() }
     }
@@ -146,6 +165,8 @@ final class EchoClient: ObservableObject {
         ducker.endListening()            // stop keep-alive + release the audio session
         isListening = false
         isPlaying = false
+        isPaused = false
+        nowPlayingClip = nil
         state = .idle
         log.add("listening stopped")
     }
@@ -154,9 +175,8 @@ final class EchoClient: ObservableObject {
     /// turned over in well past the long-poll window, iOS suspended or wedged
     /// it while backgrounded — restart it instead of showing a dead "listening".
     func appBecameActive() {
+        prune()                // roll the 24h window forward — even when not listening
         guard isListening else { return }
-        clips = store.purge(clips)               // roll the 24h window forward
-        store.save(clips)
         let stalled = Date().timeIntervalSince(lastPollAt)
         if stalled > 90 {
             log.add("watchdog: poll loop stalled \(Int(stalled))s — restarting")
@@ -199,6 +219,7 @@ final class EchoClient: ObservableObject {
                 case .empty:
                     fails = 0
                     recover()                    // 204 = healthy, nothing to play
+                    prune()                      // every poll turnover rolls the 24h window
                 case .unauthorized:
                     fails += 1
                     if case .error = state {} else {
@@ -225,6 +246,19 @@ final class EchoClient: ObservableObject {
                 }
                 try? await Task.sleep(nanoseconds: backoff(fails))
             }
+        }
+    }
+
+    /// Drop clips that crossed the 24h boundary (and their audio files). Runs
+    /// on every poll turnover, on foreground, and on start — event-driven but
+    /// frequent. Purging only at init was the field-test bug: the app stays
+    /// resident for days (keep-alive), so init never re-ran and week-old clips
+    /// stayed on the list forever.
+    private func prune() {
+        let purged = store.purge(clips)
+        if purged.count != clips.count {
+            clips = purged
+            store.save(clips)
         }
     }
 
@@ -286,12 +320,42 @@ final class EchoClient: ObservableObject {
     /// natural completion, or ≥80% elapsed when it ended early (interruption,
     /// stop, replacement) — a call at second 3 of a 30s clip keeps the dot.
     func play(_ clip: Clip) {
+        playToken += 1
+        let token = playToken
         isPlaying = true
+        isPaused = false
+        nowPlayingClip = clip
+        playbackTime = 0
+        playbackDuration = 0
         // The label doubles as the lock-screen Now Playing title.
         ducker.play(url: store.url(for: clip), title: clip.label) { [weak self] fraction in
-            self?.isPlaying = false
-            if fraction >= 0.8 { self?.markPlayed(clip.id) }
+            guard let self else { return }
+            if fraction >= 0.8 { self.markPlayed(clip.id) }
+            guard token == self.playToken else { return }   // superseded by a newer play
+            self.isPlaying = false
+            self.isPaused = false
+            self.nowPlayingClip = nil
         }
+    }
+
+    // MARK: - Mini-player transport
+
+    func togglePause() {
+        guard nowPlayingClip != nil else { return }
+        if isPaused { ducker.resume() } else { ducker.pause() }
+        isPaused.toggle()
+    }
+
+    func restartClip() {
+        guard nowPlayingClip != nil else { return }
+        ducker.seek(to: 0)
+        playbackTime = 0
+    }
+
+    func scrub(to seconds: TimeInterval) {
+        guard nowPlayingClip != nil else { return }
+        ducker.seek(to: seconds)
+        playbackTime = seconds
     }
 
     private func markPlayed(_ id: UUID) {

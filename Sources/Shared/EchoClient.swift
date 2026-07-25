@@ -70,8 +70,14 @@ final class EchoClient: ObservableObject {
     // Lazy so launching the app touches neither the audio nor the network stack —
     // both are built only when you actually start listening / play, keeping the
     // first render instant (a slow launch is what makes sideloaded apps blank).
-    private lazy var ducker: AudioDucker = {
+    // ClipPlayer is the platform seam: AVAudioSession ducking on iOS, Core
+    // Audio process-tap ducking on macOS.
+    private lazy var ducker: ClipPlayer = {
+        #if os(iOS)
         let d = AudioDucker()
+        #else
+        let d = MacDucker()
+        #endif
         d.log = { [weak self] msg in self?.log.add("audio: \(msg)") }
         d.onProgress = { [weak self] time, duration in
             self?.playbackTime = time
@@ -102,6 +108,9 @@ final class EchoClient: ObservableObject {
         if let r = h.range(of: "://") { h = String(h[r.upperBound...]) }   // drop scheme
         h = String(h.split(separator: "/").first ?? "")                    // drop /path
         h = String(h.split(separator: ":").first ?? "")                    // drop :port
+        #if os(macOS)
+        if h.isEmpty { h = "127.0.0.1" }        // the server runs on this Mac
+        #endif
         return h
     }
     private var port: String {
@@ -357,6 +366,14 @@ final class EchoClient: ObservableObject {
         ducker.seek(to: seconds)
         playbackTime = seconds
     }
+
+    #if os(macOS)
+    /// Forward the Settings "Test duck" to the Mac ducker — the tap-permission
+    /// probe (denial is silent, so it measures captured RMS; see MacDucker).
+    func testDuck(completion: @escaping (String) -> Void) {
+        (ducker as? MacDucker)?.testDuck(completion: completion)
+    }
+    #endif
 
     private func markPlayed(_ id: UUID) {
         guard let i = clips.firstIndex(where: { $0.id == id }),

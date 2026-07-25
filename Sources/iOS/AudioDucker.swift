@@ -43,7 +43,7 @@ import MediaPlayer
 ///  - The delegate only fires on *natural* completion. Interruptions (call,
 ///    Siri) end a clip without it, so they're observed and funneled into the
 ///    same teardown path.
-final class AudioDucker: NSObject, AVAudioPlayerDelegate {
+final class AudioDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     private let session = AVAudioSession.sharedInstance()
     /// Confines ALL session/player state below. Session calls block — they
     /// must never run on main (see the threading contract above).

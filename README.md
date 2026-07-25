@@ -47,6 +47,32 @@ Then:
 4. Test it: `core/voice/echo-send.sh test` — your music should duck and you
    should hear the clip.
 
+### EchoMac — the menu bar half (macOS)
+
+The same project builds a desktop player: a menu-bar icon whose panel shows
+the same clip list as the phone, and which ducks whatever the Mac is playing
+(Spotify, Music, a YouTube tab — anything audible) via a Core Audio process
+tap while Nic speaks. Design + spike measurements in
+[`docs/desktop-design.md`](docs/desktop-design.md).
+
+```sh
+xcodegen
+open Echo.xcodeproj   # EchoMac scheme → My Mac → ⌘R
+```
+
+First run: click the waveform icon → gear → set the shared token (host
+defaults to `127.0.0.1`; the server runs on the same machine) → **Test
+duck** with music playing. macOS asks once for *System Audio Recording* —
+deny it and the tap "works" while capturing silence, which is exactly what
+the test detects and reports. An AppleScript Spotify/Music volume dip is
+selectable as fallback. Unlike the phone, no 7-day re-sign: a locally
+signed macOS app keeps running.
+
+Caveats while the core side catches up: the Mac still *also* speaks through
+the direct `afplay` path until `MAC_PLAYER=app` lands in `core/voice`, and
+the server's `/next` is destructive — each clip is delivered to exactly one
+listening player (phone *or* Mac, whoever polls first).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

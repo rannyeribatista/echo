@@ -1,9 +1,16 @@
 # Echo Desktop — the menu bar app (design)
 
 > Design-first: diagram → options → recommendation → v0 scope.
-> **Status: PROPOSED** — nothing locked yet. Written while the iOS v1 lane
-> (24h history, tags, played state, lock-screen playback) is in flight; see
-> §5 for how the two lanes avoid colliding.
+> **Status: v0 BUILT 2026-07-25** (branch `feature/echomac-v0`) — shape as
+> designed in §2/§5, with the spike's amendment applied: the **process-tap
+> engine is the primary duck**, AppleScript demoted to a selectable fallback
+> (Settings → Ducking). Still pending: the core-side `MAC_PLAYER` knob (§4 —
+> until it lands the Mac double-speaks via afplay), login item (v0.1),
+> `DELIVERY` suppression. Server-surface reality check: the iOS v1 lane
+> shipped **no** history endpoint, so EchoMac reads the same destructive
+> `/next` — each clip is delivered to exactly one listening player, not both
+> (§5's "steal" risk resolved by accepting single-delivery for v0).
+> Original proposal below, kept verbatim.
 
 ## 1. The UX target
 

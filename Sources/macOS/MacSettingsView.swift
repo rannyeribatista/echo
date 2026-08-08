@@ -1,7 +1,9 @@
 import SwiftUI
 
 /// Mac settings (design: "on the Mac, host is just 127.0.0.1, so settings
-/// shrink to the token"): connection fields, the duck engine picker, the
+/// shrink to the token" — still true since 2026-08-08, when echo-server.py went
+/// tailnet-only for the phone but kept a loopback listener for exactly this):
+/// connection fields, the duck engine picker, the
 /// Test-duck button — which deliberately fires the one-time TCC prompt while
 /// he's watching AND detects the silent-denial case by measuring captured
 /// RMS — and the shared log ring.
@@ -30,7 +32,7 @@ struct MacSettingsView: View {
                     TextField("Host", text: $macHost, prompt: Text("127.0.0.1"))
                     TextField("Port", text: $macPort, prompt: Text("8790"))
                     SecureField("Shared token", text: $token)
-                    Text("The token must match core/voice/echo.conf. Leave host empty for 127.0.0.1 — the server runs on this Mac.")
+                    Text("The token must match core/voice/echo.conf. Leave host empty for 127.0.0.1 — the server runs on this Mac and always binds loopback alongside the tailnet address.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Ducking") {

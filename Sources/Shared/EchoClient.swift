@@ -65,6 +65,21 @@ final class EchoClient: ObservableObject {
     init() {
         clips = store.purge(store.load())
         store.save(clips)                    // persist the pruned index too
+        #if os(macOS)
+        // Come up listening (2026-08-08). The Mac panel is a menu-bar popover,
+        // so nothing in the view tree runs until it's clicked — hanging the
+        // auto-start off onAppear would leave the app deaf until opened. Doing
+        // it here means the client starts the moment the menu-bar icon renders.
+        // Deferred one turn so launch still paints instantly: start() builds the
+        // audio and network stacks this class otherwise keeps deliberately lazy.
+        // Default true, so a fresh install listens; only an explicit "Stop
+        // listening" clears it, and that choice now survives a relaunch.
+        // macOS only — the iPhone's battery and background rules make
+        // listen-on-launch a different decision, and nobody asked for it.
+        if UserDefaults.standard.object(forKey: "autoListen") as? Bool ?? true {
+            Task { [weak self] in self?.start() }
+        }
+        #endif
     }
 
     // Lazy so launching the app touches neither the audio nor the network stack —
@@ -154,6 +169,11 @@ final class EchoClient: ObservableObject {
         guard task == nil else { return }        // already listening
         prune()                                  // roll the 24h window before showing the list as live
         isListening = true
+        // Remember the intent, not the state: only start()/stop() write this,
+        // and stop() is reachable only from the user's own toggle — retries and
+        // errors never touch it, so a flaky network can't teach the app to come
+        // up deaf.
+        UserDefaults.standard.set(true, forKey: "autoListen")
         state = .listening
         log.add("listening started → \(host):\(port)")
         // Keep-alive so playback works in the background. If it fails, say so —
@@ -167,6 +187,7 @@ final class EchoClient: ObservableObject {
     }
 
     func stop() {
+        UserDefaults.standard.set(false, forKey: "autoListen")
         task?.cancel()
         task = nil
         session.invalidateAndCancel()

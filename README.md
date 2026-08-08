@@ -68,10 +68,18 @@ the test detects and reports. An AppleScript Spotify/Music volume dip is
 selectable as fallback. Unlike the phone, no 7-day re-sign: a locally
 signed macOS app keeps running.
 
-Caveats while the core side catches up: the Mac still *also* speaks through
-the direct `afplay` path until `MAC_PLAYER=app` lands in `core/voice`, and
-the server's `/next` is destructive — each clip is delivered to exactly one
-listening player (phone *or* Mac, whoever polls first).
+It comes up already listening, and starts at login once you install the agent:
+
+```sh
+scripts/echomac-login.sh install     # uninstall / status also available
+```
+
+That points at whatever `EchoMac.app` it finds — `/Applications` first, else
+the Xcode build inside the gitignored `build/`, which a Clean removes. Override
+with `ECHOMAC_APP=/path/to/EchoMac.app`.
+
+Caveat: the server's `/next` is destructive — each clip is delivered to exactly
+one listening player (phone *or* Mac, whoever polls first).
 
 ## License
 

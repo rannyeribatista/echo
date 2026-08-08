@@ -37,13 +37,15 @@ flowchart LR
     K --> O[(outbox + history<br/>echo-server.py :8790)]
   end
   O -->|Tailscale| P["Echo iPhone<br/>ducks via AVAudioSession"]
-  O -->|localhost| M["Echo menu bar app<br/>ducks via AppleScript"]
+  O -->|Tailscale| M["Echo menu bar app<br/>ducks via AppleScript"]
   M --> D["Spotify/Music dips →<br/>clip plays → music swells back"]
 ```
 
-One render, one queue, two players. The phone reaches the server over
-Tailscale; the Mac app talks to the same server on `127.0.0.1` — same
-port, same token, same clip format. Nothing new to operate.
+One render, one queue, two players — same port, same token, same clip format.
+Nothing new to operate. Both reach the server over Tailscale: since 2026-08-08
+`echo-server.py` binds to the Mac's tailnet IP only (off the LAN), so the
+menu-bar app's `127.0.0.1` default no longer resolves — set **Host** in its
+settings to the Mac's Tailscale IPv4 (`tailscale ip -4`), same as the phone.
 
 ## 2. The shape — a macOS target in the same project, sharing the list UI
 

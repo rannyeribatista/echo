@@ -393,3 +393,35 @@ survives as the fallback module, not the default.
 **Spike code:** `spikes/proc-tap-ducker/` — `swift build -c release`, then
 `duckctl list | taps | duck --app spotify --gain 0.2 --seconds 5 | meter`.
 Untracked, no repo state touched; promote or delete at will.
+
+## Server lifecycle 2026-08-14 — the app owns the delivery server
+
+Learned the hard way (the zombie-audio morning): after the 2026-08-13 reboot
+nothing was listening on :8790 — echo-server.py is started by hand and no one
+restarts it — while the login agent dutifully relaunched the *client*. Every
+announcement then took nic-tts.py's direct fallback: afplay on the Mac, no
+ducking, nothing to the phone. Quitting EchoMac changed nothing, because the
+voice was never coming from EchoMac. The system's two halves had opposite
+lifecycles: client at login, server at hand-start — and a reboot splits them.
+
+`ServerController` closes that split:
+
+- **Launch ensures the server.** If nothing accepts on loopback:8790 (the
+  server always binds loopback, echo.conf 2026-08-08), the app runs
+  `echo-send.sh start` (path overridable via `serverScript` in UserDefaults).
+  Login now brings up the whole chain: agent → app → server → phone + ducked
+  Mac playback.
+- **Quit stops the server — if the app started it.** Panel power button →
+  `applicationWillTerminate` → `echo-send.sh stop`. "Quit the app" finally
+  means "Echo is silent", matching the intuition the incident violated.
+- **A hand-started server is external and untouched.** Phone-only delivery
+  (server up, no app) stays possible exactly as before — start it by hand,
+  and the app won't tear it down on quit.
+- Force-quit skips `applicationWillTerminate`; `echo-send.sh stop` remains the
+  manual override for that case.
+
+Corollary that stays true: the login agent must launch a **current** build.
+The 2026-08-14 incident was compounded by the agent pointing at a Jul 25
+Debug build — three weeks older than come-up-listening. After changing the
+Mac app, rebuild (or better: put a Release copy in /Applications and re-run
+`scripts/echomac-login.sh install`).

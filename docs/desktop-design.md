@@ -1,6 +1,12 @@
 # Echo Desktop — the menu bar app (design)
 
 > Design-first: diagram → options → recommendation → v0 scope.
+> **Reframe 2026-08-20** (branch `feature/echo-streaming`): EchoMac left the
+> menu bar — it's a regular, freely positioned window now (Dock icon, ⌘Tab,
+> unplayed count on the Dock badge). The §1/§2 MenuBarExtra shape below is
+> history: Echo is growing from clip player into the voice interface to the
+> Claude CLI, and an interface earns a window. Everything else (ducking
+> engine, server lifecycle, shared views) stands.
 > **Status: v0 BUILT 2026-07-25** (branch `feature/echomac-v0`) — shape as
 > designed in §2/§5, with the spike's amendment applied: the **process-tap
 > engine is the primary duck**, AppleScript demoted to a selectable fallback

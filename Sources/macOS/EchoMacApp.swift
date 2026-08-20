@@ -1,11 +1,12 @@
 import SwiftUI
 
-/// Menu-bar entry point (design §2): a persistent top-bar icon; click it and
-/// a small window-style panel drops down with the same clip list the iPhone
-/// shows. `LSUIElement` in project.yml keeps Echo out of the Dock and ⌘Tab —
-/// always visible up top, never in the way.
-/// The app owns the delivery server (ServerController): launch ensures it,
-/// quit stops it — quit via the panel's power button lands in
+/// A real window, not a menu-bar accessory (2026-08-20). EchoMac began as a
+/// way to hear and manage Nic's clips; it's growing into the voice interface
+/// to the Claude CLI — and an interface earns a window you place and size
+/// yourself, a Dock icon, and a ⌘Tab entry. The unplayed state that used to
+/// ride the menu-bar icon rides the Dock badge now.
+/// The app still owns the delivery server (ServerController): launch ensures
+/// it, quit stops it — the window's power button and ⌘Q both land in
 /// applicationWillTerminate like any normal termination.
 final class EchoMacDelegate: NSObject, NSApplicationDelegate {
     let server = ServerController()
@@ -26,13 +27,18 @@ struct EchoMacApp: App {
     @StateObject private var client = EchoClient()
 
     var body: some Scene {
-        MenuBarExtra {
-            MacPanelView(client: client)
-        } label: {
-            // The unplayed state rides the icon itself: plain waveform when
-            // clear, filled variant while something waits.
-            Image(systemName: client.unplayedCount > 0 ? "waveform.circle.fill" : "waveform")
+        // One window, freely placed and sized. Closing it leaves the app
+        // running and listening (audio keeps arriving); the Dock icon brings
+        // the window back.
+        Window("Echo", id: "main") {
+            MacWindowView(client: client)
+                .onAppear { updateBadge(client.unplayedCount) }
+                .onChange(of: client.unplayedCount) { _, n in updateBadge(n) }
         }
-        .menuBarExtraStyle(.window)
+        .defaultSize(width: 380, height: 560)
+    }
+
+    private func updateBadge(_ n: Int) {
+        NSApp.dockTile.badgeLabel = n > 0 ? String(n) : nil
     }
 }

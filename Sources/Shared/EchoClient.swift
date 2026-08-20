@@ -151,10 +151,11 @@ final class EchoClient: ObservableObject {
         clips = store.purge(store.load())
         store.save(clips)                    // persist the pruned index too
         #if os(macOS)
-        // Come up listening (2026-08-08). The Mac panel is a menu-bar popover,
-        // so nothing in the view tree runs until it's clicked — hanging the
-        // auto-start off onAppear would leave the app deaf until opened. Doing
-        // it here means the client starts the moment the menu-bar icon renders.
+        // Come up listening (2026-08-08). Init-time rather than onAppear so
+        // listening never depends on any particular view tree appearing —
+        // true for the original menu-bar popover (nothing rendered until
+        // clicked) and still right for the windowed app (the window can be
+        // closed while the app keeps receiving).
         // Deferred one turn so launch still paints instantly: start() builds the
         // audio and network stacks this class otherwise keeps deliberately lazy.
         // Default true, so a fresh install listens; only an explicit "Stop

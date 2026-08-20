@@ -52,12 +52,14 @@ Then:
 4. Test it: `core/voice/echo-send.sh test` — your music should duck and you
    should hear the clip.
 
-### EchoMac — the menu bar half (macOS)
+### EchoMac — the desktop half (macOS)
 
-The same project builds a desktop player: a menu-bar icon whose panel shows
-the same clip list as the phone, and which ducks whatever the Mac is playing
-(Spotify, Music, a YouTube tab — anything audible) via a Core Audio process
-tap while Nic speaks. Design + spike measurements in
+The same project builds a desktop app: a regular window you place and size
+wherever you want (a menu-bar panel in its first life), showing the same
+message list as the phone, and ducking whatever the Mac is playing (Spotify,
+Music, a YouTube tab — anything audible) via a Core Audio process tap while
+Nic speaks. Unplayed messages badge the Dock icon; closing the window keeps
+it listening. Design + spike measurements in
 [`docs/desktop-design.md`](docs/desktop-design.md).
 
 ```sh
@@ -65,9 +67,8 @@ xcodegen
 open Echo.xcodeproj   # EchoMac scheme → My Mac → ⌘R
 ```
 
-First run: click the waveform icon → gear → set the shared token (host
-defaults to `127.0.0.1`; the server runs on the same machine) → **Test
-duck** with music playing. macOS asks once for *System Audio Recording* —
+First run: gear → set the shared token (host defaults to `127.0.0.1`; the
+server runs on the same machine) → **Test duck** with music playing. macOS asks once for *System Audio Recording* —
 deny it and the tap "works" while capturing silence, which is exactly what
 the test detects and reports. An AppleScript Spotify/Music volume dip is
 selectable as fallback. Unlike the phone, no 7-day re-sign: a locally
@@ -83,8 +84,9 @@ That points at whatever `EchoMac.app` it finds — `/Applications` first, else
 the Xcode build inside the gitignored `build/`, which a Clean removes. Override
 with `ECHOMAC_APP=/path/to/EchoMac.app`.
 
-Caveat: the server's `/next` is destructive — each clip is delivered to exactly
-one listening player (phone *or* Mac, whoever polls first).
+Every listening player receives every message: legacy clips broadcast until
+each active client has fetched them (2026-08-08), and walkie messages are
+cursor-based per client by design.
 
 ## License
 

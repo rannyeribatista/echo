@@ -1,10 +1,11 @@
 import SwiftUI
 
-/// The panel that drops from the menu-bar icon — the iPhone main screen
-/// distilled into a small box: status line, listening + auto-play controls,
-/// the 24h history (same shared rows), and the shared mini-player while a
-/// clip plays.
-struct MacPanelView: View {
+/// The main window (a menu-bar panel until 2026-08-20) — the iPhone main
+/// screen on the desktop: status line, listening + auto-play + walkie
+/// controls, the 24h history (same shared rows), and the shared walkie card /
+/// mini-player while a message plays. Freely resizable; the frame below is
+/// just the floor.
+struct MacWindowView: View {
     @ObservedObject var client: EchoClient
     @AppStorage("autoPlay") private var autoPlay = true
     @AppStorage("walkieMode") private var walkieMode = true
@@ -74,7 +75,7 @@ struct MacPanelView: View {
             }
         }
         .padding(12)
-        .frame(width: 340, height: 440)
+        .frame(minWidth: 340, minHeight: 420)
         .sheet(isPresented: $showSettings) { MacSettingsView(client: client) }
     }
 

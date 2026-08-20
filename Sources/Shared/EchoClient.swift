@@ -190,11 +190,17 @@ final class EchoClient: ObservableObject {
     private lazy var session = EchoClient.makeSession()
     private var lastPollAt = Date()
 
-    /// A connection-reuse-free session that waits out brief drops. Rebuilt on
-    /// every error so a half-dead socket is never retried.
+    /// A connection-reuse-free session, rebuilt on every error so a half-dead
+    /// socket is never retried. iOS waits out brief drops (radio/VPN
+    /// transitions on the run); macOS must NOT — the server is loopback, so
+    /// "refused" means down, and waitsForConnectivity turned a 1s server
+    /// restart into a ~100s deaf spell (connectivity never dropped, so it just
+    /// waited). The loop's own backoff+rebuild is the macOS retry path.
     private static func makeSession() -> URLSession {
         let cfg = URLSessionConfiguration.ephemeral
+        #if os(iOS)
         cfg.waitsForConnectivity = true
+        #endif
         cfg.timeoutIntervalForRequest = 70
         cfg.timeoutIntervalForResource = 120
         cfg.httpMaximumConnectionsPerHost = 1

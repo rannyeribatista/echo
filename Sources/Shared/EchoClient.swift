@@ -121,8 +121,14 @@ final class EchoClient: ObservableObject {
     /// clip is still loaded, just not moving).
     @Published var isPaused = false
     @Published var isListening = false
-    /// The clip in the mini-player / walkie card: non-nil until the message ends.
+    /// The clip whose audio is live right now: non-nil only while a message
+    /// is actually in flight (playing, gated, or waiting on a render).
     @Published var nowPlayingClip: Clip?
+    /// The ACTIVE message — the one the card at the top of the window shows,
+    /// full text and controls always visible. Set by every play (tap or
+    /// auto-play) and NOT cleared when playback ends: the last open message
+    /// stays open. Newest message on launch; its history row gets the border.
+    @Published var openClip: Clip?
     @Published var playbackTime: TimeInterval = 0
     @Published var playbackDuration: TimeInterval = 0
     /// Walkie playback position + gates.
@@ -150,6 +156,7 @@ final class EchoClient: ObservableObject {
     init() {
         clips = store.purge(store.load())
         store.save(clips)                    // persist the pruned index too
+        openClip = clips.first               // the window always opens on the latest message
         #if os(macOS)
         // Come up listening (2026-08-08). Init-time rather than onAppear so
         // listening never depends on any particular view tree appearing —
@@ -428,6 +435,7 @@ final class EchoClient: ObservableObject {
         if purged.count != clips.count {
             clips = purged
             store.save(clips)
+            refreshNowPlaying()
         }
     }
 
@@ -615,12 +623,18 @@ final class EchoClient: ObservableObject {
         }
     }
 
-    /// Keep the published now-playing copy in sync with the history array —
-    /// Clip is a value type, so chunk downloads would otherwise be invisible
-    /// to the card.
+    /// Keep the published now-playing / open copies in sync with the history
+    /// array — Clip is a value type, so chunk downloads and played marks would
+    /// otherwise be invisible to the card. An open clip that fell out of the
+    /// 24h window hands the card to the newest message.
     private func refreshNowPlaying() {
         if let id = nowPlayingClip?.id, let c = clips.first(where: { $0.id == id }) {
             nowPlayingClip = c
+        }
+        if let id = openClip?.id, let c = clips.first(where: { $0.id == id }) {
+            openClip = c
+        } else if openClip != nil {
+            openClip = clips.first
         }
     }
 
@@ -702,6 +716,7 @@ final class EchoClient: ObservableObject {
         awaitingRender = false
         currentChunk = 0
         nowPlayingClip = clip
+        openClip = clip
         playbackTime = 0
         playbackDuration = 0
         // The label doubles as the lock-screen Now Playing title.
@@ -723,6 +738,7 @@ final class EchoClient: ObservableObject {
         awaitingContinue = false
         awaitingRender = false
         nowPlayingClip = clips.first(where: { $0.id == clip.id }) ?? clip
+        openClip = nowPlayingClip
         currentChunk = 0
         playbackTime = 0
         playbackDuration = 0

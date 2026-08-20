@@ -30,6 +30,13 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
 
+                // The active message rides on top — full text, controls always
+                // there; the history scrolls beneath it, its open row bordered.
+                if let open = client.openClip {
+                    ActiveMessageCard(client: client, clip: open)
+                        .padding(.horizontal)
+                }
+
                 if client.clips.isEmpty {
                     Spacer()
                     Text("No messages in the last 24 hours.")
@@ -40,7 +47,9 @@ struct ContentView: View {
                     List {
                         Section("Last 24 hours") {
                             ForEach(client.clips) { clip in
-                                ClipRow(clip: clip) { client.play(clip) }
+                                ClipRow(clip: clip, isOpen: clip.id == client.openClip?.id) {
+                                    client.play(clip)
+                                }
                             }
                         }
                     }
@@ -48,18 +57,6 @@ struct ContentView: View {
                 }
             }
             .padding(.top)
-            // The one control surface once a message is playing: walkie
-            // messages get the full-text card with the Continue gate; legacy
-            // clips keep the mini-player (pause/resume, back-to-start, scrub).
-            .safeAreaInset(edge: .bottom) {
-                if let clip = client.nowPlayingClip {
-                    if clip.chunks != nil {
-                        WalkieCard(client: client, clip: clip)
-                    } else {
-                        MiniPlayerBar(client: client, clip: clip)
-                    }
-                }
-            }
             .navigationTitle("Echo")
             .toolbar {
                 Button { showSettings = true } label: {
@@ -97,5 +94,5 @@ struct ContentView: View {
     }
 }
 
-// ClipRow / LaneChip / PulsingDot / MiniPlayerBar live in
+// ClipRow / LaneChip / PulsingDot / ActiveMessageCard live in
 // Sources/Shared/ClipViews.swift — the menu-bar panel renders the same rows.

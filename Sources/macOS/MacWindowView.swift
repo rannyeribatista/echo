@@ -50,6 +50,12 @@ struct MacWindowView: View {
 
             Divider()
 
+            // The active message rides on top — full text, controls always
+            // there; the history scrolls beneath it, its open row bordered.
+            if let open = client.openClip {
+                ActiveMessageCard(client: client, clip: open)
+            }
+
             if client.clips.isEmpty {
                 Spacer()
                 Text("No messages in the last 24 hours.")
@@ -59,18 +65,11 @@ struct MacWindowView: View {
                 ScrollView {
                     LazyVStack(spacing: 2) {
                         ForEach(client.clips) { clip in
-                            ClipRow(clip: clip) { client.play(clip) }
-                                .padding(.vertical, 4)
+                            ClipRow(clip: clip, isOpen: clip.id == client.openClip?.id) {
+                                client.play(clip)
+                            }
                         }
                     }
-                }
-            }
-
-            if let clip = client.nowPlayingClip {
-                if clip.chunks != nil {
-                    WalkieCard(client: client, clip: clip)
-                } else {
-                    MiniPlayerBar(client: client, clip: clip)
                 }
             }
         }

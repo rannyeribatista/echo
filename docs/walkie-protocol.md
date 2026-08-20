@@ -30,6 +30,15 @@
    in voice.conf — flip off once both apps are rebuilt); an old server answers
    `/v2/*` with 404, which new apps read as "fall back to /next".
 
+**The legacy bridge** (added when the prototype went live, 2026-08-20): a v2
+client never polls `/next`, so flat clips rendered by a pre-walkie nic-tts
+(the main checkout, `echo-send.sh test`) would be invisible to rebuilt apps —
+during the transition that's the COORDINATOR'S VOICE. The server therefore
+presents each flat clip as a single-chunk, final manifest on the v2 surface
+(`/v2/chunk/<id>/0` serves the clip itself). Streamed messages' own legacy
+shadows are excluded: nic-tts tags them `stream_id` in the sidecar JSON and
+the bridge skips those, so a v2 client hears a streamed message exactly once.
+
 ## Who does what
 
 - **`core/voice/nic-tts.py`** — app mode + `ECHO_STREAM=on` (voice.conf):

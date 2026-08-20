@@ -21,10 +21,15 @@ back to you: what Nic says on the Mac, echoed into your ear on the move.
 
 ## How it works
 
-The Mac renders Nic's voice and queues the clip; Echo (open on your phone) holds
-a long-poll to the Mac over your private **Tailscale** network, pulls each clip,
-and ducks + plays it. No push, no cloud, no account — audio never leaves your
-devices. Full design in [`docs/architecture.md`](docs/architecture.md).
+The Mac renders Nic's voice and streams it; Echo (open on your phone) holds
+a long-poll to the Mac over your private **Tailscale** network, pulls each
+message, and ducks + plays it. Long messages arrive **walkie-style**: the full
+text shows at once, the first chunk plays within seconds of the text existing
+(while later chunks still render), playback pauses at each paragraph break
+until you tap **Continue**, and a spoken *"Over"* marks the true end. A toggle
+restores continuous auto-play. No push, no cloud, no account — audio never
+leaves your devices. Full design in [`docs/architecture.md`](docs/architecture.md);
+the streaming protocol in [`docs/walkie-protocol.md`](docs/walkie-protocol.md).
 
 ## Build & run (reproducible)
 

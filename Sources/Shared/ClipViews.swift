@@ -60,10 +60,85 @@ struct PulsingDot: View {
     }
 }
 
-/// Bottom bar while a clip is loaded: label, pause/resume, back-to-start and a
-/// scrubber. Progress arrives via EchoClient.playbackTime (~4×/s); while the
-/// finger is on the slider the bar shows the drag position instead, and the
-/// seek fires on release.
+/// The now-playing surface for a walkie message: the WHOLE message text up
+/// front (heard parts dim, the current part leads), the chunk position, and
+/// the gate — a Continue button where the old bar just rolled on. Pause /
+/// back-to-start / scrub still work, scoped to the current chunk.
+struct WalkieCard: View {
+    @ObservedObject var client: EchoClient
+    let clip: Clip
+
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                if !clip.lane.isEmpty { LaneChip(lane: clip.lane) }
+                Text(clip.label)
+                    .font(.footnote)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                if let chunks = clip.chunks, !chunks.isEmpty {
+                    Text("\(min(client.currentChunk + 1, chunks.count)) of \(chunks.count)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(clip.chunks ?? [], id: \.seq) { chunk in
+                        Text(chunk.text)
+                            .font(.footnote)
+                            .foregroundStyle(chunk.seq == client.currentChunk
+                                             ? AnyShapeStyle(.primary)
+                                             : AnyShapeStyle(.secondary))
+                            .opacity(chunk.seq < client.currentChunk ? 0.45 : 1)
+                            .strikethrough(chunk.failed)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .frame(maxHeight: 150)
+            HStack(spacing: 14) {
+                Button { client.restartClip() } label: {
+                    Image(systemName: "backward.end.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                Button { client.togglePause() } label: {
+                    Image(systemName: client.isPaused ? "play.fill" : "pause.fill")
+                        .font(.title3)
+                        .frame(width: 26)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                .disabled(client.awaitingContinue || client.awaitingRender)
+                Spacer()
+                if client.awaitingRender {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Rendering…").font(.caption)
+                    }
+                    .foregroundStyle(.secondary)
+                } else if client.awaitingContinue {
+                    Button { client.continueMessage() } label: {
+                        Label("Continue", systemImage: "play.circle.fill")
+                            .font(.callout.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal)
+        .padding(.bottom, 6)
+    }
+}
+
+/// Bottom bar while a legacy single-file clip is loaded: label, pause/resume,
+/// back-to-start and a scrubber. Progress arrives via EchoClient.playbackTime
+/// (~4×/s); while the finger is on the slider the bar shows the drag position
+/// instead, and the seek fires on release.
 struct MiniPlayerBar: View {
     @ObservedObject var client: EchoClient
     let clip: Clip

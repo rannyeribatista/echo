@@ -1,17 +1,82 @@
 import Foundation
 import SwiftUI
 
+/// One chunk of a walkie (v2) message. Its text is known the moment the
+/// manifest lands — the Mac announces the whole message up front — while the
+/// audio file appears here only once the Mac renders it and we download it.
+struct ClipChunk: Codable, Equatable {
+    let seq: Int
+    let text: String
+    var fileName: String?    // audio inside ClipStore's directory; nil = not here yet
+    var duration: Double?
+    var failed: Bool         // the Mac gave up on this chunk — playback skips it
+
+    init(seq: Int, text: String) {
+        self.seq = seq
+        self.text = text
+        self.fileName = nil
+        self.duration = nil
+        self.failed = false
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        seq = try c.decode(Int.self, forKey: .seq)
+        text = try c.decode(String.self, forKey: .text)
+        fileName = try c.decodeIfPresent(String.self, forKey: .fileName)
+        duration = try c.decodeIfPresent(Double.self, forKey: .duration)
+        failed = try c.decodeIfPresent(Bool.self, forKey: .failed) ?? false
+    }
+}
+
 /// One received voice message. Codable because the last 24 hours of these
-/// persist across launches (ClipStore).
+/// persist across launches (ClipStore). Legacy clips are one audio file;
+/// walkie messages carry a chunk list and gate at each boundary.
 struct Clip: Identifiable, Codable, Equatable {
     let id: UUID
+    let msgId: String?      // walkie message id from the Mac; nil = legacy clip
     let text: String        // what Nic says (sent by the Mac for display)
     let lane: String        // which session sent it ("core", "studium", "home"…); "" = untagged
     let label: String       // first words of the message — what the row shows
-    let fileName: String    // audio file inside ClipStore's directory
+    let fileName: String    // legacy audio file; "" for walkie messages
+    var chunks: [ClipChunk]?    // nil = legacy single-file clip
+    var isComplete: Bool        // walkie: manifest final + every chunk settled here
     let sentAt: Date?       // when the Mac rendered it (from the tag sidecar)
     let receivedAt: Date
     var playedAt: Date?     // nil = unplayed (the pulsing dot)
+
+    init(id: UUID, msgId: String? = nil, text: String, lane: String, label: String,
+         fileName: String, chunks: [ClipChunk]? = nil, isComplete: Bool = true,
+         sentAt: Date?, receivedAt: Date, playedAt: Date?) {
+        self.id = id
+        self.msgId = msgId
+        self.text = text
+        self.lane = lane
+        self.label = label
+        self.fileName = fileName
+        self.chunks = chunks
+        self.isComplete = isComplete
+        self.sentAt = sentAt
+        self.receivedAt = receivedAt
+        self.playedAt = playedAt
+    }
+
+    /// Decode tolerates pre-walkie clips.json: the new fields default to a
+    /// complete, single-file clip.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        msgId = try c.decodeIfPresent(String.self, forKey: .msgId)
+        text = try c.decode(String.self, forKey: .text)
+        lane = try c.decode(String.self, forKey: .lane)
+        label = try c.decode(String.self, forKey: .label)
+        fileName = try c.decode(String.self, forKey: .fileName)
+        chunks = try c.decodeIfPresent([ClipChunk].self, forKey: .chunks)
+        isComplete = try c.decodeIfPresent(Bool.self, forKey: .isComplete) ?? true
+        sentAt = try c.decodeIfPresent(Date.self, forKey: .sentAt)
+        receivedAt = try c.decode(Date.self, forKey: .receivedAt)
+        playedAt = try c.decodeIfPresent(Date.self, forKey: .playedAt)
+    }
 
     /// Rendered-on-the-Mac time when tagged, else arrival time — matters for
     /// clips that sat queued on the Mac before the phone connected.
@@ -40,6 +105,14 @@ enum ConnState: Equatable {
 /// retries back off but never stop; a watchdog restarts the loop when iOS
 /// suspended it in the background; and every state the label shows is real —
 /// a 401 is "token mismatch", not "Listening…".
+///
+/// WALKIE (2026-08-20): against a v2 server the client follows each message's
+/// manifest, downloading chunks as the Mac renders them — first audio seconds
+/// after the text exists, not after full synthesis. Playback is gated: one
+/// chunk, then a pause; Continue advances; the shared "Over" clip marks true
+/// end-of-message. Arriving messages QUEUE behind the one playing (the old
+/// behavior superseded it mid-audio). A server without /v2 answers 404 and the
+/// client falls back to the legacy /next poll unchanged.
 @MainActor
 final class EchoClient: ObservableObject {
     @Published var state: ConnState = .idle
@@ -48,10 +121,14 @@ final class EchoClient: ObservableObject {
     /// clip is still loaded, just not moving).
     @Published var isPaused = false
     @Published var isListening = false
-    /// The clip in the mini-player: non-nil from play() until it finishes.
+    /// The clip in the mini-player / walkie card: non-nil until the message ends.
     @Published var nowPlayingClip: Clip?
     @Published var playbackTime: TimeInterval = 0
     @Published var playbackDuration: TimeInterval = 0
+    /// Walkie playback position + gates.
+    @Published var currentChunk = 0
+    @Published var awaitingContinue = false   // paused at a chunk boundary — Continue advances
+    @Published var awaitingRender = false     // want the next chunk; the Mac hasn't finished it
     /// Newest-first history of the last 24 hours, persisted across launches.
     @Published var clips: [Clip] = []
 
@@ -61,6 +138,14 @@ final class EchoClient: ObservableObject {
     /// been superseded by a newer play, so it never clears the newer clip's
     /// mini-player state.
     private var playToken = 0
+    /// Messages that arrived while one was playing — played in order when the
+    /// current one ends. This queue is what replaced play-supersede.
+    private var pendingAutoPlay: [UUID] = []
+    /// nil = probe /v2 on the next poll; false = server predates v2, poll /next.
+    private var v2Available: Bool?
+    /// The in-flight walkie message whose manifest we're following.
+    private var trackingMsgId: String?
+    private var lastStreamProgress = Date()
 
     init() {
         clips = store.purge(store.load())
@@ -140,12 +225,28 @@ final class EchoClient: ObservableObject {
         UserDefaults.standard.object(forKey: "autoPlay") == nil
             ? true : UserDefaults.standard.bool(forKey: "autoPlay")
     }
+    /// Walkie gating on (default): pause at each chunk boundary and wait for
+    /// Continue; "Over" marks the end. Off restores continuous auto-play.
+    private var walkieMode: Bool {
+        UserDefaults.standard.object(forKey: "walkieMode") == nil
+            ? true : UserDefaults.standard.bool(forKey: "walkieMode")
+    }
+    /// Newest walkie message id fully received — the /v2/next cursor. Ids are
+    /// the Mac's ms timestamps, so integer order is arrival order.
+    private var sinceCursor: Int {
+        get { UserDefaults.standard.integer(forKey: "echoSinceMsg") }
+        set { UserDefaults.standard.set(newValue, forKey: "echoSinceMsg") }
+    }
 
     var unplayedCount: Int { clips.filter { $0.playedAt == nil }.count }
 
     /// The one line the main screen shows.
     var statusText: String {
-        if isPlaying { return isPaused ? "Paused" : "Playing…" }
+        if isPlaying {
+            if awaitingContinue { return "Paused at a break — Continue plays the next part" }
+            if awaitingRender { return "Waiting for the Mac to render the next part…" }
+            return isPaused ? "Paused" : "Playing…"
+        }
         switch state {
         case .idle: return "Idle"
         case .listening:
@@ -169,6 +270,7 @@ final class EchoClient: ObservableObject {
         guard task == nil else { return }        // already listening
         prune()                                  // roll the 24h window before showing the list as live
         isListening = true
+        v2Available = nil                        // re-probe: the server may have been upgraded
         // Remember the intent, not the state: only start()/stop() write this,
         // and stop() is reachable only from the user's own toggle — retries and
         // errors never touch it, so a flaky network can't teach the app to come
@@ -197,6 +299,11 @@ final class EchoClient: ObservableObject {
         isPlaying = false
         isPaused = false
         nowPlayingClip = nil
+        awaitingContinue = false
+        awaitingRender = false
+        currentChunk = 0
+        pendingAutoPlay = []
+        trackingMsgId = nil              // /v2/next re-serves anything unfinished on restart
         state = .idle
         log.add("listening stopped")
     }
@@ -232,12 +339,37 @@ final class EchoClient: ObservableObject {
         let ts: Double?
     }
 
+    /// Shape of a v2 stream manifest (nic-tts.py writes it, echo-server serves
+    /// it). Chunk `status` is "pending" | "ready" | "failed".
+    private struct Manifest: Decodable {
+        struct MChunk: Decodable {
+            let seq: Int
+            let text: String
+            let status: String
+            let file: String?
+            let dur: Double?
+        }
+        let id: String
+        let lane: String?
+        let label: String?
+        let ts: Double?
+        let text: String
+        let chunks: [MChunk]
+        let final: Bool
+    }
+
     private func loop() async {
         var fails = 0
         while !Task.isCancelled {
             lastPollAt = Date()
             do {
-                switch try await fetchNext() {
+                let outcome: Fetch
+                if v2Available != false {
+                    outcome = try await v2Poll()
+                } else {
+                    outcome = try await fetchNext()
+                }
+                switch outcome {
                 case .clip(let clip):
                     fails = 0
                     recover()
@@ -245,10 +377,10 @@ final class EchoClient: ObservableObject {
                     clips.insert(clip, at: 0)
                     clips = store.purge(clips)
                     store.save(clips)
-                    if autoPlay { play(clip) }
+                    autoPlayArrived(clip)
                 case .empty:
                     fails = 0
-                    recover()                    // 204 = healthy, nothing to play
+                    recover()                    // healthy, nothing (new) to play
                     prune()                      // every poll turnover rolls the 24h window
                 case .unauthorized:
                     fails += 1
@@ -305,6 +437,186 @@ final class EchoClient: ObservableObject {
         UInt64(min(fails, 5)) * 1_000_000_000                    // 1→5s, capped, never gives up
     }
 
+    // MARK: - v2 walkie polling
+
+    private func v2Get(_ path: String, timeout: TimeInterval = 70) async throws -> (Int, Data) {
+        guard let url = URL(string: "http://\(host):\(port)\(path)") else {
+            throw URLError(.badURL)
+        }
+        var req = URLRequest(url: url, timeoutInterval: timeout)
+        req.setValue(token, forHTTPHeaderField: "X-Echo-Token")
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        return (http.statusCode, data)
+    }
+
+    /// One v2 poll turn: follow the in-flight message's manifest if there is
+    /// one, otherwise long-poll for the next message. Detects a pre-v2 server
+    /// (404 on /v2/next) and flips the loop to legacy polling.
+    private func v2Poll() async throws -> Fetch {
+        if let msgId = trackingMsgId {
+            guard let clip = clips.first(where: { $0.msgId == msgId }), !clip.isComplete else {
+                trackingMsgId = nil
+                return .empty
+            }
+            let have = (clip.chunks ?? []).filter { $0.fileName != nil || $0.failed }.count
+            let (status, data) = try await v2Get("/v2/manifest/\(msgId)?have=\(have)")
+            switch status {
+            case 200:
+                if let m = try? JSONDecoder().decode(Manifest.self, from: data) {
+                    if await integrate(m) {
+                        lastStreamProgress = Date()
+                    } else {
+                        // The manifest answered but nothing moved (e.g. a chunk
+                        // download keeps failing) — don't spin hot, and give up
+                        // on the message once it's clearly dead.
+                        if Date().timeIntervalSince(lastStreamProgress) > 120 { forceFinal(msgId) }
+                        try? await Task.sleep(nanoseconds: 1_000_000_000)
+                    }
+                }
+                return .empty
+            case 204:
+                if Date().timeIntervalSince(lastStreamProgress) > 180 {
+                    log.add("stream \(msgId) stalled — closing it out")
+                    forceFinal(msgId)
+                }
+                return .empty
+            case 404:
+                // Swept before we finished — keep what we have and move on.
+                forceFinal(msgId)
+                return .empty
+            case 401: return .unauthorized
+            default: return .unexpected(status)
+            }
+        }
+        let (status, data) = try await v2Get("/v2/next?since=\(sinceCursor)")
+        switch status {
+        case 200:
+            v2Available = true
+            guard let m = try? JSONDecoder().decode(Manifest.self, from: data) else {
+                return .unexpected(200)
+            }
+            lastStreamProgress = Date()
+            _ = await integrate(m)
+            return .empty
+        case 204:
+            v2Available = true
+            await fetchOverIfMissing()      // idle moment: cache the shared Over clip
+            return .empty
+        case 404:
+            if v2Available == nil { log.add("server predates /v2 — legacy polling") }
+            v2Available = false
+            return .empty
+        case 401: return .unauthorized
+        default: return .unexpected(status)
+        }
+    }
+
+    /// Fold a manifest into the history: create the clip on first sight (full
+    /// text visible at once), download chunks the Mac has finished, mark the
+    /// message complete when everything settled. Returns whether anything moved.
+    private func integrate(_ m: Manifest) async -> Bool {
+        var progressed = false
+        if !clips.contains(where: { $0.msgId == m.id }) {
+            var label = m.label ?? ""
+            if label.isEmpty { label = Clip.defaultLabel(for: m.text) }
+            let clip = Clip(id: UUID(), msgId: m.id, text: m.text, lane: m.lane ?? "",
+                            label: label, fileName: "",
+                            chunks: m.chunks.map { ClipChunk(seq: $0.seq, text: $0.text) },
+                            isComplete: false,
+                            sentAt: m.ts.map { Date(timeIntervalSince1970: $0) },
+                            receivedAt: Date(), playedAt: nil)
+            clips.insert(clip, at: 0)
+            progressed = true
+            log.add("walkie message \(m.id): \(m.chunks.count) chunks — \(m.text.prefix(48))")
+            autoPlayArrived(clip)
+        }
+        for mc in m.chunks {
+            guard let i = clips.firstIndex(where: { $0.msgId == m.id }),
+                  let chunks = clips[i].chunks, mc.seq < chunks.count else { break }
+            if mc.status == "failed" && !chunks[mc.seq].failed {
+                clips[i].chunks?[mc.seq].failed = true
+                progressed = true
+                chunkSettled(clips[i].id, seq: mc.seq)
+            } else if mc.status == "ready" && chunks[mc.seq].fileName == nil {
+                do {
+                    let (status, data) = try await v2Get("/v2/chunk/\(m.id)/\(mc.seq)", timeout: 30)
+                    guard status == 200, !data.isEmpty else { continue }
+                    let dest = store.newAudioURL()
+                    try data.write(to: dest.url)
+                    // Re-find after the await — the array may have shifted.
+                    guard let j = clips.firstIndex(where: { $0.msgId == m.id }) else { continue }
+                    clips[j].chunks?[mc.seq].fileName = dest.fileName
+                    clips[j].chunks?[mc.seq].duration = mc.dur
+                    progressed = true
+                    chunkSettled(clips[j].id, seq: mc.seq)
+                } catch {
+                    log.add("chunk \(mc.seq) download failed: \(error.localizedDescription)")
+                }
+            }
+        }
+        if let i = clips.firstIndex(where: { $0.msgId == m.id }) {
+            let settled = (clips[i].chunks ?? []).allSatisfy { $0.fileName != nil || $0.failed }
+            if m.final && settled {
+                if !clips[i].isComplete {
+                    clips[i].isComplete = true
+                    progressed = true
+                }
+                closeOut(m.id)
+            } else {
+                trackingMsgId = m.id        // keep following it
+            }
+        }
+        clips = store.purge(clips)
+        store.save(clips)
+        refreshNowPlaying()
+        return progressed
+    }
+
+    /// The message is done arriving: advance the /v2/next cursor past it and
+    /// stop following its manifest.
+    private func closeOut(_ msgId: String) {
+        if let n = Int(msgId) { sinceCursor = max(sinceCursor, n) }
+        if trackingMsgId == msgId { trackingMsgId = nil }
+    }
+
+    /// Close out a message that will never finish (swept, or the Mac died
+    /// mid-render): whatever never arrived is marked failed so playback can
+    /// walk past it instead of waiting forever.
+    private func forceFinal(_ msgId: String) {
+        defer { closeOut(msgId) }
+        guard let i = clips.firstIndex(where: { $0.msgId == msgId }) else { return }
+        if var cs = clips[i].chunks {
+            for k in cs.indices where cs[k].fileName == nil { cs[k].failed = true }
+            clips[i].chunks = cs
+        }
+        clips[i].isComplete = true
+        store.save(clips)
+        refreshNowPlaying()
+        if nowPlayingClip?.id == clips[i].id, awaitingRender {
+            playChunk(currentChunk)          // skips the failed tail, ends the message
+        }
+    }
+
+    /// Cache the shared end-of-message "Over" clip (rendered once on the Mac).
+    private func fetchOverIfMissing() async {
+        guard store.overURL() == nil else { return }
+        if let (status, data) = try? await v2Get("/v2/over", timeout: 10),
+           status == 200, !data.isEmpty {
+            store.saveOver(data)
+            log.add("cached shared Over clip (\(data.count) bytes)")
+        }
+    }
+
+    /// Keep the published now-playing copy in sync with the history array —
+    /// Clip is a value type, so chunk downloads would otherwise be invisible
+    /// to the card.
+    private func refreshNowPlaying() {
+        if let id = nowPlayingClip?.id, let c = clips.first(where: { $0.id == id }) {
+            nowPlayingClip = c
+        }
+    }
+
     private func fetchNext() async throws -> Fetch {
         guard let url = URL(string: "http://\(host):\(port)/next") else {
             throw URLError(.badURL)
@@ -345,15 +657,43 @@ final class EchoClient: ObservableObject {
         }
     }
 
+    // MARK: - Playback
+
+    /// A message arrived while listening. Playing → it queues (never cuts the
+    /// current audio); parked silent at a gate → the new message takes over
+    /// (the parked one keeps its unplayed dot and replays from history);
+    /// otherwise it plays now. Auto-play off → it just waits in the list.
+    private func autoPlayArrived(_ clip: Clip) {
+        guard autoPlay else { return }
+        if nowPlayingClip == nil {
+            play(clip)
+        } else if awaitingContinue {
+            log.add("gate interrupted by new message")
+            play(clip)
+        } else {
+            pendingAutoPlay.append(clip.id)
+        }
+    }
+
     /// Play a clip now (ducking the music). Used by auto-play, manual taps,
-    /// and history replays. Marked played only when it was actually *heard*:
-    /// natural completion, or ≥80% elapsed when it ended early (interruption,
-    /// stop, replacement) — a call at second 3 of a 30s clip keeps the dot.
+    /// and history replays — a manual tap deliberately supersedes whatever is
+    /// playing; automatic arrivals go through autoPlayArrived instead.
     func play(_ clip: Clip) {
+        if clip.chunks != nil { startWalkie(clip) } else { playLegacy(clip) }
+    }
+
+    /// Legacy single-file clip. Marked played only when it was actually
+    /// *heard*: natural completion, or ≥80% elapsed when it ended early
+    /// (interruption, stop, replacement) — a call at second 3 of a 30s clip
+    /// keeps the dot.
+    private func playLegacy(_ clip: Clip) {
         playToken += 1
         let token = playToken
         isPlaying = true
         isPaused = false
+        awaitingContinue = false
+        awaitingRender = false
+        currentChunk = 0
         nowPlayingClip = clip
         playbackTime = 0
         playbackDuration = 0
@@ -365,25 +705,138 @@ final class EchoClient: ObservableObject {
             self.isPlaying = false
             self.isPaused = false
             self.nowPlayingClip = nil
+            self.playNextQueued()
+        }
+    }
+
+    private func startWalkie(_ clip: Clip) {
+        playToken += 1
+        isPlaying = true
+        isPaused = false
+        awaitingContinue = false
+        awaitingRender = false
+        nowPlayingClip = clips.first(where: { $0.id == clip.id }) ?? clip
+        currentChunk = 0
+        playbackTime = 0
+        playbackDuration = 0
+        Task { await self.fetchOverIfMissing() }   // needed by message end
+        playChunk(0)
+    }
+
+    /// Play chunk `index` of the now-playing message, skipping failed ones.
+    /// A chunk the Mac hasn't rendered yet parks playback on awaitingRender —
+    /// chunkSettled resumes it the moment the download lands.
+    private func playChunk(_ index: Int) {
+        guard let clip = nowPlayingClip, let chunks = clip.chunks else { return }
+        var i = index
+        while i < chunks.count, chunks[i].failed { i += 1 }
+        currentChunk = min(i, max(chunks.count - 1, 0))
+        guard i < chunks.count else { messageAudioDone(); return }
+        guard let file = chunks[i].fileName else {
+            awaitingRender = true
+            awaitingContinue = false
+            return
+        }
+        awaitingRender = false
+        awaitingContinue = false
+        playToken += 1
+        let token = playToken
+        isPlaying = true
+        isPaused = false
+        playbackTime = 0
+        playbackDuration = 0
+        ducker.play(url: store.url(fileName: file),
+                    title: "\(clip.label) — \(i + 1) of \(chunks.count)") { [weak self] _ in
+            guard let self, token == self.playToken else { return }
+            self.chunkFinished(after: i)
+        }
+    }
+
+    private func chunkFinished(after index: Int) {
+        guard let clip = nowPlayingClip, let chunks = clip.chunks else { return }
+        var next = index + 1
+        while next < chunks.count, chunks[next].failed { next += 1 }
+        guard next < chunks.count else { messageAudioDone(); return }
+        if walkieMode {
+            // The gate: audio pauses at the chunk boundary (music swells back);
+            // Continue plays the next part.
+            currentChunk = next
+            awaitingContinue = true
+            awaitingRender = false
+        } else {
+            playChunk(next)     // continuous mode: straight through
+        }
+    }
+
+    /// The gate control — advance to the next chunk.
+    func continueMessage() {
+        guard awaitingContinue else { return }
+        awaitingContinue = false
+        playChunk(currentChunk)
+    }
+
+    /// A chunk finished downloading (or failed for good) — feed playback if
+    /// it's parked waiting for exactly this.
+    private func chunkSettled(_ clipId: UUID, seq: Int) {
+        guard nowPlayingClip?.id == clipId else { return }
+        refreshNowPlaying()
+        if awaitingRender && seq == currentChunk { playChunk(currentChunk) }
+    }
+
+    /// Every audible part of the message has played: mark it heard, speak the
+    /// shared "Over" (walkie mode), then move to whatever queued behind it.
+    private func messageAudioDone() {
+        guard let clip = nowPlayingClip else { return }
+        markPlayed(clip.id)
+        awaitingContinue = false
+        awaitingRender = false
+        if walkieMode, let over = store.overURL() {
+            playToken += 1
+            let token = playToken
+            ducker.play(url: over, title: "Over") { [weak self] _ in
+                guard let self, token == self.playToken else { return }
+                self.finishMessage()
+            }
+        } else {
+            finishMessage()
+        }
+    }
+
+    private func finishMessage() {
+        isPlaying = false
+        isPaused = false
+        nowPlayingClip = nil
+        currentChunk = 0
+        playNextQueued()
+    }
+
+    private func playNextQueued() {
+        guard autoPlay else { pendingAutoPlay = []; return }
+        while let nextId = pendingAutoPlay.first {
+            pendingAutoPlay.removeFirst()
+            if let c = clips.first(where: { $0.id == nextId }) {
+                play(c)
+                return
+            }
         }
     }
 
     // MARK: - Mini-player transport
 
     func togglePause() {
-        guard nowPlayingClip != nil else { return }
+        guard nowPlayingClip != nil, !awaitingContinue, !awaitingRender else { return }
         if isPaused { ducker.resume() } else { ducker.pause() }
         isPaused.toggle()
     }
 
     func restartClip() {
-        guard nowPlayingClip != nil else { return }
+        guard nowPlayingClip != nil, !awaitingContinue, !awaitingRender else { return }
         ducker.seek(to: 0)
         playbackTime = 0
     }
 
     func scrub(to seconds: TimeInterval) {
-        guard nowPlayingClip != nil else { return }
+        guard nowPlayingClip != nil, !awaitingContinue, !awaitingRender else { return }
         ducker.seek(to: seconds)
         playbackTime = seconds
     }

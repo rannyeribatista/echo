@@ -7,6 +7,7 @@ import SwiftUI
 struct MacPanelView: View {
     @ObservedObject var client: EchoClient
     @AppStorage("autoPlay") private var autoPlay = true
+    @AppStorage("walkieMode") private var walkieMode = true
     @State private var showSettings = false
 
     var body: some View {
@@ -40,6 +41,10 @@ struct MacPanelView: View {
                     .toggleStyle(.checkbox)
                     .font(.footnote)
                     .help("Play each message the moment it arrives, ducking whatever else is audible.")
+                Toggle("Walkie", isOn: $walkieMode)
+                    .toggleStyle(.checkbox)
+                    .font(.footnote)
+                    .help("Pause at each part of a message — Continue plays the next; “Over” marks the end. Off = play straight through.")
             }
 
             Divider()
@@ -61,7 +66,11 @@ struct MacPanelView: View {
             }
 
             if let clip = client.nowPlayingClip {
-                MiniPlayerBar(client: client, clip: clip)
+                if clip.chunks != nil {
+                    WalkieCard(client: client, clip: clip)
+                } else {
+                    MiniPlayerBar(client: client, clip: clip)
+                }
             }
         }
         .padding(12)

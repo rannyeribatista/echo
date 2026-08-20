@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var client = EchoClient()
     @AppStorage("autoPlay") private var autoPlay = true
+    @AppStorage("walkieMode") private var walkieMode = true
     @State private var showSettings = false
     @Environment(\.scenePhase) private var scenePhase
 
@@ -13,9 +14,13 @@ struct ContentView: View {
 
                 Toggle("Always-on (auto-play)", isOn: $autoPlay)
                     .padding(.horizontal)
-                Text(autoPlay
-                     ? "Messages duck your music and play the moment they arrive."
-                     : "Messages wait here until you tap play.")
+                Toggle("Walkie mode (pause between parts)", isOn: $walkieMode)
+                    .padding(.horizontal)
+                Text(walkieMode
+                     ? "A message plays its first part, then waits — Continue plays the next; “Over” marks the end."
+                     : (autoPlay
+                        ? "Messages duck your music and play straight through the moment they arrive."
+                        : "Messages wait here until you tap play."))
                     .font(.footnote).foregroundStyle(.secondary)
                     .padding(.horizontal)
 
@@ -43,12 +48,16 @@ struct ContentView: View {
                 }
             }
             .padding(.top)
-            // Mini-player: the one control surface once a clip is playing —
-            // pause/resume, back-to-start, scrub. Before this, playback was
-            // fire-and-forget.
+            // The one control surface once a message is playing: walkie
+            // messages get the full-text card with the Continue gate; legacy
+            // clips keep the mini-player (pause/resume, back-to-start, scrub).
             .safeAreaInset(edge: .bottom) {
                 if let clip = client.nowPlayingClip {
-                    MiniPlayerBar(client: client, clip: clip)
+                    if clip.chunks != nil {
+                        WalkieCard(client: client, clip: clip)
+                    } else {
+                        MiniPlayerBar(client: client, clip: clip)
+                    }
                 }
             }
             .navigationTitle("Echo")

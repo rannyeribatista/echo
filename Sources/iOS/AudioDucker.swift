@@ -197,6 +197,13 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
         }
     }
 
+    func stopPlayback() {
+        queue.async {
+            guard self.player != nil else { return }
+            self.finishClipLocked()      // partial fraction; restores other audio
+        }
+    }
+
     private func startProgressTimerLocked() {
         progressTimer?.cancel()
         let t = DispatchSource.makeTimerSource(queue: queue)

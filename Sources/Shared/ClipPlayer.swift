@@ -22,4 +22,8 @@ protocol ClipPlayer: AnyObject {
     func pause()
     func resume()
     func seek(to seconds: TimeInterval)
+    /// Stop the current clip NOW: release the duck / restore other audio and
+    /// report the partial fraction through `onFinish` (pause deliberately
+    /// keeps the duck engaged; this is the way out). No-op when idle.
+    func stopPlayback()
 }

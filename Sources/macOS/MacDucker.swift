@@ -86,6 +86,13 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
         }
     }
 
+    func stopPlayback() {
+        queue.async {
+            guard self.player != nil else { return }
+            self.finishClipLocked()      // partial fraction; releases the duck
+        }
+    }
+
     // MARK: - Playback
 
     private func playLocked(url: URL, onFinish: ((Double) -> Void)?) {

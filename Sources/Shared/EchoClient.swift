@@ -846,6 +846,29 @@ final class EchoClient: ObservableObject {
 
     // MARK: - Mini-player transport
 
+    /// The user's stop: end the message HERE. Pause keeps the duck engaged
+    /// (v0 trade-off), so this is the way to hand the music back mid-message.
+    /// The card stays open; whatever queued behind it stays as unplayed dots
+    /// rather than suddenly starting.
+    func stopPlayback() {
+        guard nowPlayingClip != nil else { return }
+        // A stop in the last moments still counts as heard (the ≥80% rule).
+        if let clip = nowPlayingClip, clip.chunks == nil,
+           playbackDuration > 0, playbackTime / playbackDuration >= 0.8 {
+            markPlayed(clip.id)
+        }
+        playToken += 1                   // orphan the in-flight finish callback
+        ducker.stopPlayback()
+        pendingAutoPlay = []
+        isPlaying = false
+        isPaused = false
+        awaitingContinue = false
+        awaitingRender = false
+        nowPlayingClip = nil
+        currentChunk = 0
+        log.add("playback stopped by user")
+    }
+
     func togglePause() {
         guard nowPlayingClip != nil, !awaitingContinue, !awaitingRender else { return }
         if isPaused { ducker.resume() } else { ducker.pause() }

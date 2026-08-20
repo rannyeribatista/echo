@@ -137,12 +137,13 @@ struct ActiveMessageCard: View {
 
     @ViewBuilder private var controls: some View {
         if isLive {
-            HStack(spacing: 14) {
+            HStack(spacing: 10) {
                 Button { client.restartClip() } label: {
                     Image(systemName: "backward.end.fill")
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.tint)
+                .disabled(client.awaitingContinue || client.awaitingRender)
                 Button { client.togglePause() } label: {
                     Image(systemName: client.isPaused ? "play.fill" : "pause.fill")
                         .font(.title3)
@@ -151,9 +152,32 @@ struct ActiveMessageCard: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.tint)
                 .disabled(client.awaitingContinue || client.awaitingRender)
-                if clip.chunks == nil {
-                    // Single-file clip: scrub the whole thing. While the finger
-                    // is down the bar shows the drag position; seek on release.
+                // Stop ends the message here and hands the music back — pause
+                // deliberately keeps the duck engaged, so this is the way out.
+                Button { client.stopPlayback() } label: {
+                    Image(systemName: "stop.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.tint)
+                if client.awaitingRender {
+                    Spacer()
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Rendering…").font(.caption)
+                    }
+                    .foregroundStyle(.secondary)
+                } else if client.awaitingContinue {
+                    Spacer()
+                    Button { client.continueMessage() } label: {
+                        Label("Continue", systemImage: "play.circle.fill")
+                            .font(.callout.weight(.semibold))
+                    }
+                    .buttonStyle(.borderedProminent)
+                } else {
+                    // The reproduction bar — scoped to the playing unit: the
+                    // whole clip for single-file messages, the current chunk
+                    // for walkie ones. While the finger is down the bar shows
+                    // the drag position; the seek fires on release.
                     Slider(
                         value: Binding(
                             get: { scrubbing ? scrubTime
@@ -169,21 +193,6 @@ struct ActiveMessageCard: View {
                     Text("\(timeText(scrubbing ? scrubTime : client.playbackTime)) / \(timeText(client.playbackDuration))")
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
-                } else {
-                    Spacer()
-                    if client.awaitingRender {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Rendering…").font(.caption)
-                        }
-                        .foregroundStyle(.secondary)
-                    } else if client.awaitingContinue {
-                        Button { client.continueMessage() } label: {
-                            Label("Continue", systemImage: "play.circle.fill")
-                                .font(.callout.weight(.semibold))
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
                 }
             }
         } else {

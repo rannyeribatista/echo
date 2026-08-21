@@ -27,6 +27,42 @@ struct LaneInfo: Identifiable {
     var displayName: String { name }
 }
 
+/// The sphere's wall (experimental, may roll back — Ranny): a circle whose
+/// radius yields with small gaussian bulges where the ribbon presses it.
+struct BulgeCircle: InsettableShape {
+    var angles: [Double]
+    var amounts: [Double]
+    var insetAmount: CGFloat = 0
+
+    func path(in rect: CGRect) -> Path {
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        let baseR = Double(min(rect.width, rect.height) / 2 - insetAmount)
+        var path = Path()
+        let n = 72
+        for i in 0...n {
+            let th = Double(i) / Double(n) * 6.28318 - 3.14159
+            var r = baseR
+            for j in 0..<min(angles.count, amounts.count) {
+                var d = th - angles[j]
+                while d > 3.14159 { d -= 6.28318 }
+                while d < -3.14159 { d += 6.28318 }
+                r += amounts[j] * exp(-(d * d) / 0.16)
+            }
+            let pt = CGPoint(x: c.x + CGFloat(cos(th) * r),
+                             y: c.y + CGFloat(sin(th) * r))
+            if i == 0 { path.move(to: pt) } else { path.addLine(to: pt) }
+        }
+        path.closeSubpath()
+        return path
+    }
+
+    func inset(by amount: CGFloat) -> BulgeCircle {
+        var s = self
+        s.insetAmount += amount
+        return s
+    }
+}
+
 struct LaneRailView: View {
     @ObservedObject var client: EchoClient
     @State private var renamingLane: String?
@@ -169,6 +205,12 @@ struct LaneCircle: View {
     @ViewBuilder private func orbBody(phase: Double) -> some View {
         let pal = palette
         let seed = Self.stableHue(info.id) * 6.28318
+        let longitude: Double = phase * 1.2566        // 2π / 5s — full turn every 5s
+        let spinAxis: Double = phase * 0.12 + seed    // the poles themselves spin, slowly
+        let cosA = cos(spinAxis)
+        let sinA = sin(spinAxis)
+        let wall = wallShape(phase: phase, longitude: longitude,
+                             cosA: cosA, sinA: sinA, seed: seed)
         ZStack {
             // Hollow shell: nearly clear heart, color gathering at the rim.
             Circle().fill(RadialGradient(
@@ -203,10 +245,6 @@ struct LaneCircle: View {
                 let R = Double(min(size.width, size.height) / 2)
                 let cx = Double(c.x)
                 let cy = Double(c.y)
-                let spinAxis: Double = phase * 0.12 + seed          // the poles themselves spin, slowly
-                let cosA = cos(spinAxis)
-                let sinA = sin(spinAxis)
-
                 func ribbon(longitude: Double, wobSeed: Double, alpha: Double) {
                     let m = 40
                     var pts: [CGPoint] = []
@@ -218,9 +256,9 @@ struct LaneCircle: View {
                         let sth = sin(th)
                         let y0: Double = -cos(th) * R * 0.92
                         let base: Double = sth * sinL * R * 0.82
-                        let w1: Double = 0.45 * sin(2.2 * t01 * Double.pi + phase * 0.9 + wobSeed)
-                        let w2: Double = 0.25 * sin(4.1 * t01 * Double.pi - phase * 0.6 + wobSeed * 2)
-                        let skew: Double = sth * R * (w1 + w2)
+                        // ONE sine deformation (Ranny) — drastic but pure.
+                        let w1: Double = 0.50 * sin(2.2 * t01 * Double.pi + phase * 0.9 + wobSeed)
+                        let skew: Double = sth * R * w1
                         let x0: Double = base + skew
                         let xr: Double = x0 * cosA - y0 * sinA
                         let yr: Double = x0 * sinA + y0 * cosA
@@ -238,29 +276,35 @@ struct LaneCircle: View {
                         }
                         ctx.stroke(path,
                                    with: .color(Color(hue: hue, saturation: 0.85,
-                                                      brightness: 1).opacity(0.30 * alpha)),
+                                                      brightness: 1).opacity(0.45 * alpha)),
                                    lineWidth: 2.2)
                     }
-                    var core = Path()
-                    for (i, pt) in pts.enumerated() {
-                        if i == 0 { core.move(to: pt) } else { core.addLine(to: pt) }
+                    // The light itself: a graded core, near FULL WHITE at the
+                    // ribbon's strongest reach, dimming toward the poles.
+                    for i in 0..<(pts.count - 1) {
+                        let t01 = Double(i) / Double(m)
+                        let e = pow(sin(t01 * Double.pi), 1.6)
+                        let a = (0.22 + 0.72 * e) * alpha
+                        var seg = Path()
+                        seg.move(to: pts[i])
+                        seg.addLine(to: pts[i + 1])
+                        ctx.stroke(seg, with: .color(Color.white.opacity(a)),
+                                   lineWidth: 1.3 + 1.3 * e)
                     }
-                    ctx.stroke(core, with: .color(Color.white.opacity(0.18 * alpha)),
-                               lineWidth: 0.9)
                 }
 
                 ctx.addFilter(.blur(radius: 1.3))
-                let longitude: Double = phase * 1.2566        // 2π / 5s — full turn every 5s
                 ribbon(longitude: longitude, wobSeed: seed, alpha: 1)
                 ribbon(longitude: longitude + 2.3, wobSeed: seed * 3 + 1.7, alpha: 0.55)
             }
         }
-        .clipShape(Circle())
+        .scaleEffect(1.09)          // paint past the rim so bulges have body
+        .clipShape(wall)
         // The atmosphere (earth-limb treatment): a blurred bright rim melts
         // the sharp clip edge, and the twin glows burn brighter — stronger,
-        // not larger.
+        // not larger. The limb rides the yielding wall, so pushes glow too.
         .overlay {
-            Circle().strokeBorder(pal.light.opacity(0.75), lineWidth: 1.6)
+            wall.strokeBorder(pal.light.opacity(0.75), lineWidth: 1.6)
                 .blur(radius: 2.2)
         }
         .shadow(color: pal.light.opacity(0.85), radius: 2.5)
@@ -270,6 +314,35 @@ struct LaneCircle: View {
         // Status changes flow, never snap (Ranny): tween the whole palette.
         .animation(.easeInOut(duration: 0.9), value: paletteKey)
         .opacity(info.isGhost ? 0.5 : 1)
+    }
+
+    /// Where the ribbon presses the wall (experimental border push): sample
+    /// the same meridian math; any point crossing the contact radius bends
+    /// the sphere outward at its angle.
+    private func wallShape(phase: Double, longitude: Double,
+                           cosA: Double, sinA: Double, seed: Double) -> BulgeCircle {
+        let R0 = 27.0
+        var angles: [Double] = []
+        var amounts: [Double] = []
+        let sinL0 = sin(longitude)
+        for i in stride(from: 0, through: 40, by: 4) {
+            let t01 = Double(i) / 40.0
+            let th = t01 * Double.pi
+            let sth = sin(th)
+            let y0: Double = -cos(th) * R0 * 0.92
+            let base: Double = sth * sinL0 * R0 * 0.82
+            let w1: Double = 0.50 * sin(2.2 * t01 * Double.pi + phase * 0.9 + seed)
+            let x0: Double = base + sth * R0 * w1
+            let xr: Double = x0 * cosA - y0 * sinA
+            let yr: Double = x0 * sinA + y0 * cosA
+            let dist = (xr * xr + yr * yr).squareRoot()
+            let thr = R0 * 0.88
+            if dist > thr {
+                angles.append(atan2(yr, xr))
+                amounts.append(min((dist - thr) * 0.8, 3.0))
+            }
+        }
+        return BulgeCircle(angles: angles, amounts: amounts)
     }
 
     private var paletteKey: String {

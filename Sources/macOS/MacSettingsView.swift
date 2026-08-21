@@ -13,6 +13,8 @@ struct MacSettingsView: View {
     @AppStorage("macPort") private var macPort = "8790"
     @AppStorage("token") private var token = ""
     @AppStorage("macDuckMode") private var duckMode = "tap"
+    @AppStorage("duckGain") private var duckGain = 0.16
+    @AppStorage("appTheme") private var appTheme = "auto"
     @ObservedObject private var log = EchoLog.shared
     @Environment(\.dismiss) private var dismiss
     @State private var duckVerdict: String?
@@ -35,12 +37,29 @@ struct MacSettingsView: View {
                     Text("The token must match core/voice/echo.conf. Leave host empty for 127.0.0.1 — the server runs on this Mac and always binds loopback alongside the tailnet address.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                Section("Appearance") {
+                    Picker("Theme", selection: $appTheme) {
+                        Text("Auto").tag("auto")
+                        Text("Light").tag("light")
+                        Text("Dark").tag("dark")
+                    }
+                    .pickerStyle(.segmented)
+                    .onChange(of: appTheme) { _, t in Self.applyTheme(t) }
+                }
                 Section("Ducking") {
                     Picker("Engine", selection: $duckMode) {
                         Text("Process tap — ducks everything").tag("tap")
                         Text("AppleScript — Spotify & Music only").tag("applescript")
                     }
                     .pickerStyle(.radioGroup)
+                    HStack {
+                        Text("Music volume while Nic speaks")
+                        Slider(value: $duckGain, in: 0.05...0.5)
+                        Text("\(Int(duckGain * 100))%")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, alignment: .trailing)
+                    }
                     Button("Test duck") {
                         duckVerdict = "Testing — listen for the dip…"
                         client.testDuck { duckVerdict = $0 }
@@ -69,5 +88,15 @@ struct MacSettingsView: View {
             .formStyle(.grouped)
         }
         .frame(width: 400, height: 480)
+    }
+
+    /// Theme = NSApp appearance: nil follows the system (Auto, the default).
+    /// Called on change here and at launch from the app delegate.
+    static func applyTheme(_ t: String) {
+        switch t {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: NSApp.appearance = nil
+        }
     }
 }

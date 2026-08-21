@@ -5,10 +5,12 @@ import SwiftUI
 /// carries the lane's harness state (ready / working / attention / finished /
 /// closed — the A9 table in docs/cockpit-design.md); the dot marks unheard
 /// messages. Tap opens the lane's pane; the context menu promotes a lane to
-/// main orchestrator — its voice leads while every other lane queues silently
-/// (A10 "both"). Shared view: the iPhone renders the same rail.
+/// main orchestrator or renames it. Since the iteration close, each circle
+/// wears a stable identity gradient derived from its lane key, with initials
+/// from the display name — the "profile photo" until real ones exist.
 struct LaneInfo: Identifiable {
     let id: String          // lane key ("" = untagged legacy clips)
+    let name: String        // display name (custom or prettified basename)
     let state: String?      // ready|working|attention|finished|closed; nil = no status feed
     let unplayed: Int
     let lastActivity: Date
@@ -20,11 +22,13 @@ struct LaneInfo: Identifiable {
     /// hiding, so open-vs-gone stays distinguishable at a glance).
     let isGhost: Bool
 
-    var displayName: String { id.isEmpty ? "untagged" : id }
+    var displayName: String { name }
 }
 
 struct LaneRailView: View {
     @ObservedObject var client: EchoClient
+    @State private var renamingLane: String?
+    @State private var renameText = ""
 
     var body: some View {
         let lanes = client.lanes
@@ -36,6 +40,28 @@ struct LaneRailView: View {
                             client.selectLane(info.id)
                         } setMain: { on in
                             client.setMainLane(on ? info.id : nil)
+                        } rename: {
+                            renameText = info.name
+                            renamingLane = info.id
+                        }
+                        .popover(isPresented: Binding(
+                            get: { renamingLane == info.id },
+                            set: { if !$0 { renamingLane = nil } }
+                        )) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("Lane name").font(.caption).foregroundStyle(.secondary)
+                                TextField(info.id.isEmpty ? "untagged" : info.id,
+                                          text: $renameText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .frame(width: 200)
+                                    .onSubmit {
+                                        client.renameLane(info.id, to: renameText)
+                                        renamingLane = nil
+                                    }
+                                Text("Empty restores the default.")
+                                    .font(.caption2).foregroundStyle(.tertiary)
+                            }
+                            .padding(12)
                         }
                     }
                 }
@@ -46,13 +72,13 @@ struct LaneRailView: View {
     }
 }
 
-/// One lane's circle. Ring color is state; a working ring pulses (the same
-/// heartbeat idiom as the unplayed dot); the open lane's circle is tinted;
-/// the main orchestrator wears a star.
+/// One lane's circle: an identity gradient (stable hash of the lane key) with
+/// initials, the status ring around it, the unheard dot, the main star.
 struct LaneCircle: View {
     let info: LaneInfo
     let open: () -> Void
     let setMain: (Bool) -> Void
+    let rename: () -> Void
     @State private var dim = false
 
     var body: some View {
@@ -74,15 +100,17 @@ struct LaneCircle: View {
                                 .frame(width: 52, height: 52)
                         }
                         Circle()
-                            .fill(info.isOpen ? Color.accentColor.opacity(0.18)
-                                              : Color.primary.opacity(0.06))
+                            .fill(identityGradient)
                             .frame(width: 42, height: 42)
-                            .opacity(info.isGhost ? 0.55 : 1)
+                            .overlay {
+                                Circle().strokeBorder(.white.opacity(info.isOpen ? 0.85 : 0),
+                                                      lineWidth: 1.5)
+                            }
+                            .opacity(info.isGhost ? 0.45 : 1)
                         Text(initials)
-                            .font(.system(size: 15, weight: .semibold, design: .rounded))
-                            .foregroundStyle(info.isOpen ? AnyShapeStyle(.tint)
-                                                         : AnyShapeStyle(.primary))
-                            .opacity(info.isGhost ? 0.5 : 1)
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                            .opacity(info.isGhost ? 0.7 : 1)
                     }
                     .overlay(alignment: .bottomTrailing) {
                         if info.isMain {
@@ -109,20 +137,48 @@ struct LaneCircle: View {
         }
         .buttonStyle(.plain)
         .contextMenu {
+            Button("Rename lane…") { rename() }
             // A ghost can't lead the audio — no main toggle on the dead.
-            if info.isGhost {
-                EmptyView()
-            } else if info.isMain {
-                Button("Clear main orchestrator") { setMain(false) }
-            } else {
-                Button("Set as main orchestrator") { setMain(true) }
+            if !info.isGhost {
+                if info.isMain {
+                    Button("Clear main orchestrator") { setMain(false) }
+                } else {
+                    Button("Set as main orchestrator") { setMain(true) }
+                }
             }
         }
         .help(helpText)
         .onAppear { dim = true }
     }
 
-    private var initials: String { String(info.displayName.prefix(2)).uppercased() }
+    /// Two letters of identity: first letters of the first two words of the
+    /// display name, else the first two characters.
+    private var initials: String {
+        let words = info.name.split(separator: " ")
+        if words.count >= 2 {
+            return (words[0].prefix(1) + words[1].prefix(1)).uppercased()
+        }
+        return String(info.name.prefix(2)).uppercased()
+    }
+
+    /// A stable per-lane gradient: djb2 over the lane KEY (not the editable
+    /// name), so a lane keeps its color across renames and launches.
+    private var identityGradient: LinearGradient {
+        let h = Self.stableHue(info.id)
+        let sat = info.isGhost ? 0.0 : 0.65
+        let c1 = Color(hue: h, saturation: sat, brightness: info.isGhost ? 0.6 : 0.78)
+        let c2 = Color(hue: (h + 0.08).truncatingRemainder(dividingBy: 1),
+                       saturation: info.isGhost ? 0.0 : 0.75,
+                       brightness: info.isGhost ? 0.45 : 0.58)
+        return LinearGradient(colors: [c1, c2],
+                              startPoint: .topLeading, endPoint: .bottomTrailing)
+    }
+
+    private static func stableHue(_ s: String) -> Double {
+        var h: UInt32 = 5381
+        for u in s.unicodeScalars { h = h &* 33 &+ u.value }
+        return Double(h % 360) / 360
+    }
 
     /// The A9 colors (design note in docs/cockpit-design.md): teal working,
     /// amber attention, accent for finished-with-unheard, dim for ready/idle.
@@ -139,7 +195,8 @@ struct LaneCircle: View {
     }
 
     private var helpText: String {
-        var bits: [String] = [info.displayName]
+        var bits: [String] = [info.name]
+        if info.name != info.id, !info.id.isEmpty { bits.append("(\(info.id))") }
         if info.isGhost {
             bits.append("closed — history only")
         } else if let s = info.state {
@@ -148,5 +205,35 @@ struct LaneCircle: View {
         if info.unplayed > 0 { bits.append("\(info.unplayed) unheard") }
         if info.isMain { bits.append("main orchestrator") }
         return bits.joined(separator: " · ")
+    }
+}
+
+/// Lane utils (cockpit iteration close): the open lane's curated links — a
+/// dev server, the design canvas, anything external — as tappable chips.
+/// Registered from any terminal via echo-link.sh; same chips on the phone.
+struct LaneLinksRow: View {
+    let links: [EchoClient.LaneLink]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(links, id: \.url) { link in
+                    if let url = URL(string: link.url) {
+                        Link(destination: url) {
+                            Label(link.title, systemImage: "link")
+                                .font(.caption)
+                                .lineLimit(1)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 4)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
+                        .help(link.url)
+                    }
+                }
+            }
+            .padding(.horizontal, 4)
+        }
     }
 }

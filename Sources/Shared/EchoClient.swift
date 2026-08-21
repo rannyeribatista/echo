@@ -301,6 +301,7 @@ final class EchoClient: ObservableObject {
         return activity.keys.map { key in
             let st = laneStates[key]
             return LaneInfo(id: key,
+                            name: displayName(for: key),
                             state: st?.state,
                             unplayed: unplayed[key] ?? 0,
                             lastActivity: activity[key] ?? .distantPast,
@@ -354,6 +355,31 @@ final class EchoClient: ObservableObject {
     private func setOpenLane(_ lane: String?) {
         openLane = lane
         UserDefaults.standard.set(lane, forKey: "openLane")
+    }
+
+    // MARK: - Lane naming (cockpit iteration close)
+
+    /// Custom names for lane keys, set from the circle's context menu. The
+    /// default prettifies the cwd basename (hyphens/underscores → spaces).
+    private var laneNames: [String: String] {
+        UserDefaults.standard.dictionary(forKey: "laneNames") as? [String: String] ?? [:]
+    }
+
+    func displayName(for lane: String) -> String {
+        if let n = laneNames[lane], !n.isEmpty { return n }
+        let base = lane.isEmpty ? "untagged" : lane
+        return base
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: "_", with: " ")
+    }
+
+    func renameLane(_ lane: String, to newName: String) {
+        var m = laneNames
+        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        if trimmed.isEmpty { m.removeValue(forKey: lane) } else { m[lane] = trimmed }
+        UserDefaults.standard.set(m, forKey: "laneNames")
+        objectWillChange.send()
+        log.add("lane \(lane.isEmpty ? "untagged" : lane) named \"\(trimmed.isEmpty ? "(default)" : trimmed)\"")
     }
 
     /// Bring a message into the pane without playing it — the pager's
@@ -495,11 +521,19 @@ final class EchoClient: ObservableObject {
         let ts: Double?
     }
 
+    /// One curated lane link (a dev server, the design canvas…), registered
+    /// via echo-link.sh and delivered inside the status snapshot.
+    struct LaneLink: Decodable, Equatable {
+        let title: String
+        let url: String
+    }
+
     /// One lane's entry in the /v2/status snapshot (cockpit rail).
     struct LaneStatusEntry: Decodable, Equatable {
         let state: String       // ready|working|attention|finished|closed
         let session: String?
         let ts: Double?
+        let links: [LaneLink]?
     }
 
     /// The /v2/status long-poll answer: a fold counter + the full snapshot.

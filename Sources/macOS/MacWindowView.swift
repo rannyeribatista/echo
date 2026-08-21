@@ -13,6 +13,12 @@ struct MacWindowView: View {
         VStack(spacing: 10) {
             LaneRailView(client: client)
 
+            // Lane utils: the open lane's curated links (dev server, canvas…).
+            if let lane = client.openLane,
+               let links = client.laneStates[lane]?.links, !links.isEmpty {
+                LaneLinksRow(links: links)
+            }
+
             TransportBar(client: client)
 
             Divider()

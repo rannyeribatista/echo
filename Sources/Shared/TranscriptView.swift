@@ -495,7 +495,8 @@ private struct MessageBlock: View {
             if let chunks = clip.chunks {
                 ForEach(chunks, id: \.seq) { chunk in
                     Text(chunk.text)
-                        .font(.system(size: Self.textSize))
+                        .font(.system(size: Self.textSize, design: .serif))
+                        .lineSpacing(5)
                         .multilineTextAlignment(.center)
                         .strikethrough(chunk.failed)
                         .opacity(paragraphOpacity(chunk.seq))
@@ -510,7 +511,8 @@ private struct MessageBlock: View {
                 }
             } else {
                 Text(clip.text)
-                    .font(.system(size: Self.textSize))
+                    .font(.system(size: Self.textSize, design: .serif))
+                    .lineSpacing(5)
                     .multilineTextAlignment(.center)
                     .opacity(1)
                     .frame(maxWidth: .infinity, alignment: .center)

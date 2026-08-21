@@ -12,6 +12,7 @@ final class EchoMacDelegate: NSObject, NSApplicationDelegate {
     let server = ServerController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        MacSettingsView.applyTheme(UserDefaults.standard.string(forKey: "appTheme") ?? "auto")
         server.log = { EchoLog.shared.add("server: \($0)") }
         server.ensureRunning()
     }

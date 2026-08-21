@@ -14,6 +14,12 @@ struct ContentView: View {
                 LaneRailView(client: client)
                     .padding(.horizontal)
 
+                if let lane = client.openLane,
+                   let links = client.laneStates[lane]?.links, !links.isEmpty {
+                    LaneLinksRow(links: links)
+                        .padding(.horizontal)
+                }
+
                 statusCard
 
                 Button(client.isListening ? "Stop listening" : "Start listening") {

@@ -34,12 +34,11 @@ struct ContentView: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
 
-                // The active message rides on top — full text, controls always
-                // there; the history scrolls beneath it, its open row bordered.
-                if let open = client.openClip {
-                    ActiveMessageCard(client: client, clip: open)
-                        .padding(.horizontal)
-                }
+                // The transport rides fixed on top; the transcript below is
+                // the whole content area — the open lane's messages,
+                // chat-style, current one at the bottom (cockpit drive).
+                TransportBar(client: client)
+                    .padding(.horizontal)
 
                 if visibleClips.isEmpty {
                     Spacer()
@@ -49,17 +48,8 @@ struct ContentView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                 } else {
-                    // The open lane's 24h history, newest first. Tap to (re)play.
-                    List {
-                        Section("Last 24 hours") {
-                            ForEach(visibleClips) { clip in
-                                ClipRow(clip: clip, isOpen: clip.id == client.openClip?.id) {
-                                    client.play(clip)
-                                }
-                            }
-                        }
-                    }
-                    .listStyle(.plain)
+                    TranscriptView(client: client, clips: visibleClips)
+                        .padding(.horizontal)
                 }
             }
             .padding(.top)

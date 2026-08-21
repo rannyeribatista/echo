@@ -55,11 +55,12 @@ struct MacWindowView: View {
 
             Divider()
 
-            // The active message rides on top — full text, controls always
-            // there; the history scrolls beneath it, its open row bordered.
-            if let open = client.openClip {
-                ActiveMessageCard(client: client, clip: open)
-            }
+            // The transport rides fixed on top; the transcript below is the
+            // whole content area — the open lane's messages, chat-style,
+            // current one at the bottom (cockpit drive, 2026-08-21).
+            TransportBar(client: client)
+
+            Divider()
 
             if visibleClips.isEmpty {
                 Spacer()
@@ -69,15 +70,7 @@ struct MacWindowView: View {
                     .font(.footnote).foregroundStyle(.secondary)
                 Spacer()
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(visibleClips) { clip in
-                            ClipRow(clip: clip, isOpen: clip.id == client.openClip?.id) {
-                                client.play(clip)
-                            }
-                        }
-                    }
-                }
+                TranscriptView(client: client, clips: visibleClips)
             }
         }
         .padding(12)

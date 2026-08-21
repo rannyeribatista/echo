@@ -16,18 +16,6 @@ struct ContentView: View {
 
                 statusCard
 
-                Toggle("Always-on (auto-play)", isOn: $autoPlay)
-                    .padding(.horizontal)
-                Toggle("Walkie mode (pause between parts)", isOn: $walkieMode)
-                    .padding(.horizontal)
-                Text(walkieMode
-                     ? "A message plays its first part, then waits — Continue plays the next; “Over” marks the end."
-                     : (autoPlay
-                        ? "Messages duck your music and play straight through the moment they arrive."
-                        : "Messages wait here until you tap play."))
-                    .font(.footnote).foregroundStyle(.secondary)
-                    .padding(.horizontal)
-
                 Button(client.isListening ? "Stop listening" : "Start listening") {
                     client.toggleListening()
                 }

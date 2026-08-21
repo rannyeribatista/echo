@@ -265,6 +265,10 @@ final class EchoClient: ObservableObject {
         UserDefaults.standard.object(forKey: "walkieMode") == nil
             ? true : UserDefaults.standard.bool(forKey: "walkieMode")
     }
+    /// Mute (cockpit rounding, 08-21): messages keep arriving and light their
+    /// dots, but nothing plays AUTOMATICALLY — a deliberate tap still obeys
+    /// the human. Replaces "Stop listening" as the everyday quiet switch.
+    private var isMuted: Bool { UserDefaults.standard.bool(forKey: "muted") }
     /// Newest walkie message id fully received — the /v2/next cursor. Ids are
     /// the Mac's ms timestamps, so integer order is arrival order.
     private var sinceCursor: Int {
@@ -329,7 +333,7 @@ final class EchoClient: ObservableObject {
         if let newest = clips.first(where: { $0.lane == lane }) {
             openClip = newest
         }
-        guard autoPlay else { return }
+        guard autoPlay, !isMuted else { return }
         // The sounding message is still unplayed — exclude it, or the lane's
         // backlog queues a replay of it behind itself.
         let backlog = clips.filter {
@@ -865,7 +869,7 @@ final class EchoClient: ObservableObject {
         if openLane == nil {
             setOpenLane(clip.lane)   // first message ever: its lane becomes the pane
         }
-        guard autoPlay else { return }
+        guard autoPlay, !isMuted else { return }
         guard soundingLanes.contains(clip.lane) else {
             log.add("lane \(clip.lane.isEmpty ? "untagged" : clip.lane) queued silently (pane not open)")
             return
@@ -1033,7 +1037,7 @@ final class EchoClient: ObservableObject {
     }
 
     private func playNextQueued() {
-        guard autoPlay else { pendingAutoPlay = []; return }
+        guard autoPlay, !isMuted else { pendingAutoPlay = []; return }
         while let nextId = pendingAutoPlay.first {
             pendingAutoPlay.removeFirst()
             // A queued item whose lane he switched away from stays as an

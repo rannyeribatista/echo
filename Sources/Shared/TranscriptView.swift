@@ -552,31 +552,63 @@ private struct MessageBlock: View {
 
 // MARK: - Transport
 
-/// The fixed transport bar above the pager — everything the active card used
-/// to carry: live controls (restart · pause · stop · Continue/Rendering/
-/// scrubber) with the chunk counter, or a replay affordance when idle.
+/// The single control row (cockpit rounding, 08-21): media transport on the
+/// left using the free space, the mode cluster pinned right — auto-play
+/// (bolt), reasoning/full-play (segmented icons), mute (speaker). "Play
+/// again" is gone: any paragraph is a play button. The old status row died —
+/// status + Settings live in the app menu now; quitting the app is the off
+/// switch. The height saved is reserved for user input, coming later.
 struct TransportBar: View {
     @ObservedObject var client: EchoClient
+    @AppStorage("autoPlay") private var autoPlay = true
+    @AppStorage("walkieMode") private var walkieMode = true
+    @AppStorage("muted") private var muted = false
     @State private var scrubbing = false
     @State private var scrubTime: TimeInterval = 0
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             if client.nowPlayingClip != nil {
                 liveControls
-            } else if let open = client.openClip {
-                Button { client.play(open) } label: {
-                    Label("Play again", systemImage: "play.fill").font(.callout)
-                }
-                .buttonStyle(.bordered)
-                Spacer()
-                Text(open.displayedAt, style: .time)
-                    .font(.caption).foregroundStyle(.secondary)
             } else {
-                Spacer().frame(height: 24)
+                if let open = client.openClip {
+                    Text(open.displayedAt, style: .time)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
             }
+            modeCluster
         }
         .frame(minHeight: 30)
+    }
+
+    private var modeCluster: some View {
+        HStack(spacing: 12) {
+            Button { autoPlay.toggle() } label: {
+                Image(systemName: "bolt.fill")
+                    .foregroundStyle(autoPlay ? AnyShapeStyle(.tint)
+                                              : AnyShapeStyle(.secondary))
+            }
+            .buttonStyle(.plain)
+            .help(autoPlay ? "Auto-play on — arrivals play by the rail's routing. Click to require a tap."
+                           : "Auto-play off — messages wait for your tap.")
+            Picker("", selection: $walkieMode) {
+                Image(systemName: "playpause.fill").tag(true)
+                Image(systemName: "play.fill").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .frame(width: 76)
+            .help(walkieMode ? "Reasoning — pause at each part; Continue plays the next."
+                             : "Full play — messages play straight through.")
+            Button { muted.toggle() } label: {
+                Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .foregroundStyle(muted ? AnyShapeStyle(.orange)
+                                           : AnyShapeStyle(.tint))
+            }
+            .buttonStyle(.plain)
+            .help(muted ? "Muted — messages arrive and wait silently. Click to unmute."
+                        : "Mute — keep receiving, never auto-play.")
+        }
     }
 
     @ViewBuilder private var liveControls: some View {

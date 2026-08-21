@@ -36,6 +36,19 @@ struct EchoMacApp: App {
                 .onChange(of: client.unplayedCount) { _, n in updateBadge(n) }
         }
         .defaultSize(width: 380, height: 560)
+        // Status moved out of the window into the app menu (cockpit rounding):
+        // click "Echo" in the menu bar to read the connection/playback line.
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Divider()
+                Text(client.statusText)
+            }
+        }
+
+        // Settings live in the standard place now — Echo menu → Settings (⌘,).
+        Settings {
+            MacSettingsView(client: client)
+        }
     }
 
     private func updateBadge(_ n: Int) {

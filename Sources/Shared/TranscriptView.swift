@@ -583,6 +583,14 @@ struct TransportBar: View {
             modeCluster
         }
         .frame(minHeight: 30)
+        // Transport layout changes (play/pause/stop/gate/render) glide
+        // instead of snapping (Ranny, orb polish pass).
+        .animation(.easeInOut(duration: 0.22), value: transportKey)
+    }
+
+    private var transportKey: String {
+        "\(client.nowPlayingClip != nil)|\(client.isPaused)|" +
+        "\(client.awaitingContinue)|\(client.awaitingRender)"
     }
 
     private var modeCluster: some View {

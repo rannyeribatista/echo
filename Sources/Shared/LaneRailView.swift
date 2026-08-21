@@ -72,7 +72,8 @@ struct LaneRailView: View {
                     }
                 }
                 .padding(.horizontal, 4)
-                .padding(.vertical, 2)
+                .padding(.top, 9)
+                .padding(.bottom, 4)
             }
         }
     }
@@ -87,6 +88,8 @@ struct LaneCircle: View {
     let open: () -> Void
     let setMain: (Bool) -> Void
     let rename: () -> Void
+
+    @State private var coasting = false
 
     private var animated: Bool {
         !info.isGhost && (isSpeaking || info.state == "working")
@@ -145,8 +148,21 @@ struct LaneCircle: View {
     /// so idle orbs cost nothing; at phase 0 the line and particles hold a
     /// still constellation.
     private var orb: some View {
-        TimelineView(.animation(minimumInterval: 1 / 24, paused: !animated)) { tl in
-            orbBody(phase: animated ? tl.date.timeIntervalSinceReferenceDate : 0)
+        TimelineView(.animation(minimumInterval: 1 / 24,
+                                paused: !(animated || coasting))) { tl in
+            orbBody(phase: (animated || coasting)
+                    ? tl.date.timeIntervalSinceReferenceDate : 0)
+        }
+        // Motion coasts for a beat after speech/work ends instead of freezing
+        // mid-swirl (the play/pause/stop abruptness Ranny flagged).
+        .onChange(of: animated) { on in
+            if !on {
+                coasting = true
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 1_200_000_000)
+                    coasting = false
+                }
+            }
         }
     }
 
@@ -164,94 +180,91 @@ struct LaneCircle: View {
             // Two translucent liquid swirls.
             Circle()
                 .fill(AngularGradient(
-                    colors: [.clear, pal.swirl.opacity(0.55), .clear,
-                             .white.opacity(0.18), .clear],
+                    colors: [.clear, pal.swirl.opacity(0.40), .clear,
+                             .white.opacity(0.14), .clear],
                     center: .center))
                 .rotationEffect(.radians(phase * 0.8))
                 .blur(radius: 5)
             Circle()
                 .fill(AngularGradient(
-                    colors: [.clear, identityTint.opacity(0.40), .clear],
+                    colors: [.clear, identityTint.opacity(0.30), .clear],
                     center: .center))
                 .rotationEffect(.radians(-phase * 1.35 + 2))
                 .blur(radius: 7)
-            // The fluid interior (orb v3, Ranny's polish): micro-photons that
-            // twinkle in and out as they drift, each casting a faint prismatic
-            // refraction; and a SURFACE wave — an envelope-gated ripple hugging
-            // the rim, so occasionally the sphere's skin seems to undulate
-            // without the wave itself ever being an object you look at.
+            // The fluid interior (orb v4, after the Dribbble reference):
+            // a chromatic RIBBON — Ranny's pole-to-pole line — pinned at both
+            // poles, skewing drastically along its run, rotating a full
+            // longitude every 5 seconds while the axis itself slowly spins.
+            // Drawn as parallel spectral strokes of the same path (the prism
+            // dispersion: cyan/magenta/green/amber side by side, oil-film
+            // style), with a fainter phase-shifted sibling for the folds.
             Canvas { ctx, size in
                 let c = CGPoint(x: size.width / 2, y: size.height / 2)
-                let R = min(size.width, size.height) / 2
-                // Surface wave: mostly invisible; fades in on a slow envelope.
-                let env = pow(max(0, sin(phase * 0.23 + seed)), 4)
-                if env > 0.02 {
-                    let n = 72
-                    func rimPath(inset: Double, phi: Double, amp: Double) -> Path {
-                        var p = Path()
-                        for i in 0...n {
-                            let th = Double(i) / Double(n) * 6.28318
-                            let r = R - inset + amp * sin(3 * th - phase * 1.2 + seed + phi)
-                            let pt = CGPoint(x: c.x + CGFloat(cos(th) * r),
-                                             y: c.y + CGFloat(sin(th) * r))
-                            if i == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
-                        }
-                        p.closeSubpath()
-                        return p
-                    }
-                    ctx.stroke(rimPath(inset: 1.8, phi: 0, amp: 1.9),
-                               with: .color(pal.light.opacity(0.40 * env)), lineWidth: 1.6)
-                    ctx.stroke(rimPath(inset: 3.2, phi: .pi, amp: 1.4),
-                               with: .color(pal.dark.opacity(0.35 * env)), lineWidth: 1.2)
-                }
-                // Micro-photons: many, tiny, light-emitting, intermittent.
-                // (Arithmetic kept in explicit Double steps — one fused
-                // expression here sent the type-checker into the weeds.)
-                let prismA = Color(hue: 0.55, saturation: 0.85, brightness: 1)
-                let prismB = Color(hue: 0.83, saturation: 0.75, brightness: 1)
-                let RR = Double(R)
+                let R = Double(min(size.width, size.height) / 2)
                 let cx = Double(c.x)
                 let cy = Double(c.y)
-                for i in 0..<22 {
-                    let fi = Double(i)
-                    let sp: Double = 0.25 + 0.11 * fi.truncatingRemainder(dividingBy: 4)
-                    let ang: Double = phase * sp + seed + fi * 0.9
-                    let breath: Double = sin(phase * (0.4 + 0.07 * fi) + fi * 2.1 + seed)
-                    let rr: Double = RR * (0.12 + 0.62 * (0.5 + 0.5 * breath))
-                    // Twinkle envelope: each photon has its own show/hide cycle.
-                    let twRaw: Double = sin(phase * (0.7 + 0.13 * fi) + fi * 1.3 + seed * 3)
-                    let tw: Double = pow(max(0, twRaw), 3)
-                    guard tw > 0.03 else { continue }
-                    let px: Double = cx + cos(ang) * rr
-                    let py: Double = cy + sin(ang) * rr
-                    let pt = CGPoint(x: px, y: py)
-                    // Prismatic halo: white heart refracting into spectral
-                    // cyan/magenta before it fades — the refraction effect.
-                    let halo: Double = 1.5 + 3.5 * tw
-                    let haloRect = CGRect(x: px - halo, y: py - halo,
-                                          width: halo * 2, height: halo * 2)
-                    let stops: [Gradient.Stop] = [
-                        .init(color: Color.white.opacity(0.50 * tw), location: 0),
-                        .init(color: prismA.opacity(0.26 * tw), location: 0.45),
-                        .init(color: prismB.opacity(0.16 * tw), location: 0.75),
-                        .init(color: Color.clear, location: 1)
-                    ]
-                    ctx.fill(Path(ellipseIn: haloRect),
-                             with: .radialGradient(Gradient(stops: stops),
-                                                   center: pt, startRadius: 0,
-                                                   endRadius: halo))
-                    let d: Double = 0.8 + 0.8 * tw
-                    let coreRect = CGRect(x: px - d / 2, y: py - d / 2,
-                                          width: d, height: d)
-                    ctx.fill(Path(ellipseIn: coreRect),
-                             with: .color(Color.white.opacity(0.85 * tw)))
+                let spinAxis: Double = phase * 0.12 + seed          // the poles themselves spin, slowly
+                let cosA = cos(spinAxis)
+                let sinA = sin(spinAxis)
+
+                func ribbon(longitude: Double, wobSeed: Double, alpha: Double) {
+                    let m = 40
+                    var pts: [CGPoint] = []
+                    pts.reserveCapacity(m + 1)
+                    let sinL = sin(longitude)
+                    for i in 0...m {
+                        let t01 = Double(i) / Double(m)
+                        let th = t01 * Double.pi
+                        let sth = sin(th)
+                        let y0: Double = -cos(th) * R * 0.92
+                        let base: Double = sth * sinL * R * 0.82
+                        let w1: Double = 0.45 * sin(2.2 * t01 * Double.pi + phase * 0.9 + wobSeed)
+                        let w2: Double = 0.25 * sin(4.1 * t01 * Double.pi - phase * 0.6 + wobSeed * 2)
+                        let skew: Double = sth * R * (w1 + w2)
+                        let x0: Double = base + skew
+                        let xr: Double = x0 * cosA - y0 * sinA
+                        let yr: Double = x0 * sinA + y0 * cosA
+                        pts.append(CGPoint(x: cx + xr, y: cy + yr))
+                    }
+                    // Spectral dispersion: the same path stroked in parallel
+                    // slivers of the spectrum — the prism disturbance.
+                    let spectrum: [(Double, Double)] = [(-2.4, 0.50), (-1.2, 0.83),
+                                                        (0, 0.33), (1.2, 0.12), (2.4, 0.66)]
+                    for (off, hue) in spectrum {
+                        var path = Path()
+                        for (i, pt) in pts.enumerated() {
+                            let q = CGPoint(x: pt.x + off * cosA, y: pt.y + off * sinA)
+                            if i == 0 { path.move(to: q) } else { path.addLine(to: q) }
+                        }
+                        ctx.stroke(path,
+                                   with: .color(Color(hue: hue, saturation: 0.85,
+                                                      brightness: 1).opacity(0.30 * alpha)),
+                                   lineWidth: 2.2)
+                    }
+                    var core = Path()
+                    for (i, pt) in pts.enumerated() {
+                        if i == 0 { core.move(to: pt) } else { core.addLine(to: pt) }
+                    }
+                    ctx.stroke(core, with: .color(Color.white.opacity(0.18 * alpha)),
+                               lineWidth: 0.9)
                 }
+
+                ctx.addFilter(.blur(radius: 1.3))
+                let longitude: Double = phase * 1.2566        // 2π / 5s — full turn every 5s
+                ribbon(longitude: longitude, wobSeed: seed, alpha: 1)
+                ribbon(longitude: longitude + 2.3, wobSeed: seed * 3 + 1.7, alpha: 0.55)
             }
         }
         .clipShape(Circle())
-        // The atmosphere: a whisper of glow hugging the sphere's border.
-        .shadow(color: pal.light.opacity(0.45), radius: 2.5)
-        .shadow(color: pal.swirl.opacity(0.22), radius: 6)
+        // The atmosphere (earth-limb treatment): a blurred bright rim melts
+        // the sharp clip edge, and the twin glows burn brighter — stronger,
+        // not larger.
+        .overlay {
+            Circle().strokeBorder(pal.light.opacity(0.75), lineWidth: 1.6)
+                .blur(radius: 2.2)
+        }
+        .shadow(color: pal.light.opacity(0.85), radius: 2.5)
+        .shadow(color: pal.swirl.opacity(0.45), radius: 6)
         .scaleEffect(1 + (isSpeaking ? min(level, 1) * 0.22 : 0))
         .animation(.easeOut(duration: 0.12), value: level)
         // Status changes flow, never snap (Ranny): tween the whole palette.

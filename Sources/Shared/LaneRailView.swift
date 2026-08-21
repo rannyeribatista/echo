@@ -75,7 +75,6 @@ struct LaneRailView: View {
     @ObservedObject var client: EchoClient
     @State private var renamingLane: String?
     @State private var renameText = ""
-    @Namespace private var railNS
 
     var body: some View {
         let lanes = client.lanes
@@ -84,8 +83,14 @@ struct LaneRailView: View {
         if !lanes.isEmpty {
             VStack(spacing: 6) {
                 if let featured = lanes.first(where: { $0.isOpen }) {
+                    // In-place morph, not a cross-container flight: matched
+                    // geometry breaks across a ScrollView (clipped traveler,
+                    // stale-frame pairing — Ranny's artifact). The promoted
+                    // orb grows into this slot; the demoted one shrinks into
+                    // the row.
                     circle(featured, speakingLane: speakingLane, unit: 1.15)
-                        .matchedGeometryEffect(id: featured.id, in: railNS)
+                        .id(featured.id)
+                        .transition(.scale(scale: 0.45).combined(with: .opacity))
                         .frame(maxWidth: .infinity)
                 }
                 let rest = lanes.filter { !$0.isOpen }
@@ -94,7 +99,7 @@ struct LaneRailView: View {
                         HStack(alignment: .top, spacing: 8) {
                             ForEach(rest) { info in
                                 circle(info, speakingLane: speakingLane, unit: 0.5)
-                                    .matchedGeometryEffect(id: info.id, in: railNS)
+                                    .transition(.scale(scale: 1.8).combined(with: .opacity))
                             }
                         }
                         .padding(.horizontal, 4)

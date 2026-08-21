@@ -162,9 +162,14 @@ only the sounding paragraph stays strong and its siblings drop to the
 unselected fade. Magnetic edges: scroll-settle snaps to message bottoms
 (90pt radius, bottom-aligned = the reading position) so crossing a message
 edge takes a deliberate push, while long messages stay freely scrollable
-inside. Honest caveat: this is SwiftUI's native snap physics — the full
-"needle into a cell" elastic resistance curve would need custom NSScrollView
-physics; judge by feel first.
+inside. Pass 2 (same drive): SwiftUI's `ScrollTargetBehavior` turned out
+inert on macOS trackpad scrolling (the AppKit scroll bridge never consults
+it) — replaced with an offset settle-watcher: a 220ms debounce re-armed on
+every scroll tick; on settle within the radius, a spring (response 0.35,
+damping 0.78) pops the view to the message's bottom. Those three numbers ARE
+the elasticity tuning; full needle-into-cell drag resistance would still
+need NSScrollView physics. Text finalized 17pt centered; a true bottom
+anchor (+20pt tail) fixed last-line clipping.
 
 **Design notes (recommendations, revisit from use):** render every worker turn
 v0 — background audio has no latency requirement; defer-render-until-opened is

@@ -23,8 +23,17 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     private var onFinish: ((Double) -> Void)?
     private var engine: TapEngine?
     private var progressTimer: DispatchSourceTimer?
+    private var releaseTimer: DispatchSourceTimer?
     private var activity: NSObjectProtocol?
     private let scriptDucker = ScriptDucker()
+
+    /// Duck hold (2026-08-21): a finished clip does NOT release the duck
+    /// immediately — it waits this long, and any new clip inside the window
+    /// cancels the release. Kills the flap between continuous-mode paragraphs
+    /// (separate streams with a sub-second gap), between the last chunk and
+    /// "Over", between queued messages, and on tap-to-play jumps. A user stop
+    /// still releases instantly — stop means "music back NOW".
+    private let releaseHoldMs = 1000
 
     /// Residual music level while Nic speaks. 0.2 originally; 0.16 since
     /// 2026-08-20 (Ranny: "duck 20% more"). Tunable without a rebuild:
@@ -60,7 +69,11 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
 
     func endListening() {
         queue.async {
-            if self.player != nil { self.finishClipLocked() }
+            if self.player != nil { self.finishClipLocked(releaseNow: true) }
+            // A pending hold with no new clip coming: let go immediately.
+            self.releaseTimer?.cancel()
+            self.releaseTimer = nil
+            if self.engine != nil { self.releaseDuckLocked() }
             if let a = self.activity {
                 ProcessInfo.processInfo.endActivity(a)
                 self.activity = nil
@@ -95,7 +108,7 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     func stopPlayback() {
         queue.async {
             guard self.player != nil else { return }
-            self.finishClipLocked()      // partial fraction; releases the duck
+            self.finishClipLocked(releaseNow: true)   // stop = music back NOW
         }
     }
 
@@ -120,8 +133,10 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     }
 
     /// Same fraction semantics as iOS: 1 only on natural completion; every
-    /// other exit reports how far playback actually got.
-    private func finishClipLocked(completed: Bool = false) {
+    /// other exit reports how far playback actually got. The duck release is
+    /// HELD by default (releaseHoldMs) so back-to-back clips don't flap;
+    /// releaseNow is the user-intent escape hatch (stop, end of listening).
+    private func finishClipLocked(completed: Bool = false, releaseNow: Bool = false) {
         stopProgressTimerLocked()
         let fraction: Double
         if completed {
@@ -133,10 +148,32 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
         }
         player?.stop()
         player = nil
-        releaseDuckLocked()
+        if releaseNow {
+            releaseTimer?.cancel()
+            releaseTimer = nil
+            releaseDuckLocked()
+        } else {
+            scheduleReleaseLocked()
+        }
         let cb = onFinish
         onFinish = nil
         if let cb { DispatchQueue.main.async { cb(fraction) } }
+    }
+
+    /// Arm the delayed release. If a new clip starts inside the window,
+    /// engageDuckLocked cancels this and the duck never moves.
+    private func scheduleReleaseLocked() {
+        releaseTimer?.cancel()
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + .milliseconds(releaseHoldMs))
+        t.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.releaseTimer?.cancel()
+            self.releaseTimer = nil
+            if self.player == nil { self.releaseDuckLocked() }
+        }
+        t.resume()
+        releaseTimer = t
     }
 
     // MARK: - The duck
@@ -146,6 +183,10 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     /// path-handoff seams happen at identical levels). A silent Mac means no
     /// targets — nothing audible, nothing to duck, the clip just plays.
     private func engageDuckLocked() {
+        // A clip arrived inside the release hold: keep the duck exactly where
+        // it is — no swell, no re-dip.
+        releaseTimer?.cancel()
+        releaseTimer = nil
         if duckMode == "applescript" {
             scriptDucker.duck(to: Double(duckGain))
             return

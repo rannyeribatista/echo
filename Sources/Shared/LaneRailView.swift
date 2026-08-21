@@ -105,21 +105,25 @@ struct LaneCircle: View {
                                 .background(Circle().fill(.background))
                         }
                     }
-                HStack(spacing: 4) {
-                    if info.unplayed > 0 {
-                        Circle().fill(Color.accentColor)
-                            .frame(width: 5, height: 5)
+                Text(info.displayName)
+                    .font(.caption2)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .foregroundStyle(info.isOpen ? AnyShapeStyle(.tint)
+                                                 : AnyShapeStyle(.secondary))
+                    .opacity(info.isGhost ? 0.6 : 1)
+                    // The unheard dot rides absolute at the name's top-right,
+                    // grazing above the last character — transient, never in
+                    // the reading path, never on the sphere.
+                    .overlay(alignment: .topTrailing) {
+                        if info.unplayed > 0 {
+                            Circle().fill(Color.accentColor)
+                                .frame(width: 5, height: 5)
+                                .offset(x: 7, y: -2)
+                        }
                     }
-                    Text(info.displayName)
-                        .font(.caption2)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .foregroundStyle(info.isOpen ? AnyShapeStyle(.tint)
-                                                     : AnyShapeStyle(.secondary))
-                        .opacity(info.isGhost ? 0.6 : 1)
-                }
-                .frame(width: 76)
+                    .frame(width: 76)
             }
         }
         .buttonStyle(.plain)
@@ -171,38 +175,71 @@ struct LaneCircle: View {
                     center: .center))
                 .rotationEffect(.radians(-phase * 1.35 + 2))
                 .blur(radius: 7)
-            // The fluid interior: one morphing closed line + drifting motes.
+            // The fluid interior (orb v3, Ranny's polish): micro-photons that
+            // twinkle in and out as they drift, each casting a faint prismatic
+            // refraction; and a SURFACE wave — an envelope-gated ripple hugging
+            // the rim, so occasionally the sphere's skin seems to undulate
+            // without the wave itself ever being an object you look at.
             Canvas { ctx, size in
                 let c = CGPoint(x: size.width / 2, y: size.height / 2)
                 let R = min(size.width, size.height) / 2
-                var line = Path()
-                let n = 72
-                for i in 0...n {
-                    let th = Double(i) / Double(n) * 6.28318
-                    let r = R * (0.52 + 0.11 * sin(3 * th + phase * 1.6 + seed)
-                                      + 0.07 * sin(5 * th - phase * 1.05 + seed * 2))
-                    let pt = CGPoint(x: c.x + CGFloat(cos(th) * r),
-                                     y: c.y + CGFloat(sin(th) * r))
-                    if i == 0 { line.move(to: pt) } else { line.addLine(to: pt) }
+                // Surface wave: mostly invisible; fades in on a slow envelope.
+                let env = pow(max(0, sin(phase * 0.23 + seed)), 4)
+                if env > 0.02 {
+                    let n = 72
+                    func rimPath(inset: Double, phi: Double, amp: Double) -> Path {
+                        var p = Path()
+                        for i in 0...n {
+                            let th = Double(i) / Double(n) * 6.28318
+                            let r = R - inset + amp * sin(3 * th - phase * 1.2 + seed + phi)
+                            let pt = CGPoint(x: c.x + CGFloat(cos(th) * r),
+                                             y: c.y + CGFloat(sin(th) * r))
+                            if i == 0 { p.move(to: pt) } else { p.addLine(to: pt) }
+                        }
+                        p.closeSubpath()
+                        return p
+                    }
+                    ctx.stroke(rimPath(inset: 1.8, phi: 0, amp: 1.9),
+                               with: .color(pal.light.opacity(0.40 * env)), lineWidth: 1.6)
+                    ctx.stroke(rimPath(inset: 3.2, phi: .pi, amp: 1.4),
+                               with: .color(pal.dark.opacity(0.35 * env)), lineWidth: 1.2)
                 }
-                line.closeSubpath()
-                ctx.addFilter(.blur(radius: 1.2))
-                ctx.stroke(line, with: .color(pal.swirl.opacity(0.55)), lineWidth: 1.1)
-                for i in 0..<9 {
+                // Micro-photons: many, tiny, light-emitting, intermittent.
+                let prismA = Color(hue: 0.55, saturation: 0.85, brightness: 1)
+                let prismB = Color(hue: 0.83, saturation: 0.75, brightness: 1)
+                for i in 0..<22 {
                     let fi = Double(i)
-                    let sp = 0.35 + 0.13 * fi.truncatingRemainder(dividingBy: 3)
-                    let ang = phase * sp + seed + fi * 0.7
-                    let rr = R * (0.18 + 0.55 * (0.5 + 0.5 * sin(phase * (0.5 + 0.11 * fi) + fi * 1.9 + seed)))
+                    let sp = 0.25 + 0.11 * fi.truncatingRemainder(dividingBy: 4)
+                    let ang = phase * sp + seed + fi * 0.9
+                    let rr = R * (0.12 + 0.62 * (0.5 + 0.5 * sin(phase * (0.4 + 0.07 * fi) + fi * 2.1 + seed)))
+                    // Twinkle envelope: each photon has its own show/hide cycle.
+                    let tw = pow(max(0, sin(phase * (0.7 + 0.13 * fi) + fi * 1.3 + seed * 3)), 3)
+                    guard tw > 0.03 else { continue }
                     let pt = CGPoint(x: c.x + CGFloat(cos(ang) * rr),
                                      y: c.y + CGFloat(sin(ang) * rr))
-                    let d = 1.6 + 1.4 * (0.5 + 0.5 * sin(fi * 2.3 + phase * 0.8))
+                    // Prismatic halo: white heart refracting into spectral
+                    // cyan/magenta before it fades — the refraction effect.
+                    let halo = 1.5 + 3.5 * tw
+                    ctx.fill(Path(ellipseIn: CGRect(x: pt.x - halo, y: pt.y - halo,
+                                                    width: halo * 2, height: halo * 2)),
+                             with: .radialGradient(
+                                Gradient(stops: [
+                                    .init(color: .white.opacity(0.50 * tw), location: 0),
+                                    .init(color: prismA.opacity(0.26 * tw), location: 0.45),
+                                    .init(color: prismB.opacity(0.16 * tw), location: 0.75),
+                                    .init(color: .clear, location: 1)]),
+                                center: pt, startRadius: 0, endRadius: halo))
+                    let d = 0.8 + 0.8 * tw
                     ctx.fill(Path(ellipseIn: CGRect(x: pt.x - d / 2, y: pt.y - d / 2,
                                                     width: d, height: d)),
-                             with: .color((i % 3 == 0 ? Color.white : pal.swirl).opacity(0.55)))
+                             with: .color(.white.opacity(0.85 * tw)))
                 }
             }
         }
         .clipShape(Circle())
+        // The atmosphere: a whisper of glow hugging the sphere's border.
+        .shadow(color: pal.light.opacity(0.45), radius: 2.5)
+        .shadow(color: pal.swirl.opacity(0.22), radius: 6)
         .scaleEffect(1 + (isSpeaking ? min(level, 1) * 0.22 : 0))
         .animation(.easeOut(duration: 0.12), value: level)
         // Status changes flow, never snap (Ranny): tween the whole palette.

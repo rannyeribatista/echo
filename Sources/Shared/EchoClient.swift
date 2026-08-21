@@ -330,30 +330,14 @@ final class EchoClient: ObservableObject {
         return s
     }
 
-    /// Tap on a circle: this lane's pane fills the window and its unheard
-    /// backlog plays oldest-first — "sit and wait until I get back to that
-    /// pane" ends now. Queued behind whatever is already sounding, never
-    /// cutting it (the standing walkie rule).
+    /// Tap on a circle: this lane's pane fills the window — and nothing
+    /// sounds (Ranny, orb polish pass): auto-play means "arrivals play while
+    /// I'm IN the lane", never "entering a lane starts audio". The backlog
+    /// waits as dots; a tap on any paragraph plays it.
     func selectLane(_ lane: String) {
         setOpenLane(lane)
         if let newest = clips.first(where: { $0.lane == lane }) {
             openClip = newest
-        }
-        guard autoPlay, !isMuted else { return }
-        // The sounding message is still unplayed — exclude it, or the lane's
-        // backlog queues a replay of it behind itself.
-        let backlog = clips.filter {
-            $0.lane == lane && $0.playedAt == nil && $0.id != nowPlayingClip?.id
-        }.reversed()
-        guard !backlog.isEmpty else { return }
-        if nowPlayingClip == nil {
-            let rest = backlog.dropFirst()
-            if let first = backlog.first { play(first) }
-            pendingAutoPlay.append(contentsOf: rest.map(\.id)
-                .filter { !pendingAutoPlay.contains($0) })
-        } else {
-            pendingAutoPlay.append(contentsOf: backlog.map(\.id)
-                .filter { !pendingAutoPlay.contains($0) })
         }
     }
 

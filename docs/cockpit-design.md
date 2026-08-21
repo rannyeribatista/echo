@@ -151,6 +151,21 @@ exits before its async Stop hook runs and strands a "working" ring (candidate:
 server-side working→ready decay) · lane display names are raw cwd basenames
 (mapping belongs to the profile-pictures pass).
 
+**Resolved from the second live-drive pass (same day) — the transcript.**
+Ranny's spec, built hot: the content area is one chat-style scroll — oldest at
+top, current message at the bottom, scroll up for history; message text 2×
+(20pt), unboxed, filling the window; thin time separators between messages;
+the transport extracted to a fixed bar on top; text mechanics kept (tap a
+paragraph to play from it). Fade hierarchy: unselected messages wear the
+played fade (0.4) · the selected message reads strong · while audio plays,
+only the sounding paragraph stays strong and its siblings drop to the
+unselected fade. Magnetic edges: scroll-settle snaps to message bottoms
+(90pt radius, bottom-aligned = the reading position) so crossing a message
+edge takes a deliberate push, while long messages stay freely scrollable
+inside. Honest caveat: this is SwiftUI's native snap physics — the full
+"needle into a cell" elastic resistance curve would need custom NSScrollView
+physics; judge by feel first.
+
 **Design notes (recommendations, revisit from use):** render every worker turn
 v0 — background audio has no latency requirement; defer-render-until-opened is
 the many-lane optimization and lands naturally after P1's warm engine · worker

@@ -15,7 +15,7 @@ struct MacSettingsView: View {
     @AppStorage("macDuckMode") private var duckMode = "tap"
     @AppStorage("duckGain") private var duckGain = 0.16
     @AppStorage("appTheme") private var appTheme = "auto"
-    @AppStorage("messageFont") private var messageFont = "system"
+    @AppStorage("messageFont") private var messageFont = "newyork"
     @AppStorage("messageFontSize") private var messageFontSize = 17.0
     @ObservedObject private var log = EchoLog.shared
     @Environment(\.dismiss) private var dismiss
@@ -50,8 +50,12 @@ struct MacSettingsView: View {
                 }
                 Section("Reading") {
                     Picker("Message font", selection: $messageFont) {
-                        Text("System (SF)").tag("system")
-                        Text("New York").font(.system(size: 13, design: .serif)).tag("newyork")
+                        Text("Apple Serif — New York").font(.system(size: 13, design: .serif)).tag("newyork")
+                        Text("Apple Sans — SF").tag("system")
+                        Text("SF Mono").font(.system(size: 13, design: .monospaced)).tag("mono")
+                        Text("Menlo").font(.custom("Menlo", size: 13)).tag("menlo")
+                        Text("Ubuntu").font(.custom("Ubuntu", size: 13)).tag("ubuntu")
+                        Text("Iowan Old Style").font(.custom("Iowan Old Style", size: 13)).tag("iowan")
                         Text("Charter").font(.custom("Charter", size: 13)).tag("charter")
                         Text("Georgia").font(.custom("Georgia", size: 13)).tag("georgia")
                         Text("Palatino").font(.custom("Palatino", size: 13)).tag("palatino")

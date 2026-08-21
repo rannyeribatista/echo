@@ -478,18 +478,23 @@ private struct MessageBlock: View {
     let clip: Clip
 
     /// Reading typography (Settings → Reading): family + size are the
-    /// reader's choice; Apple SF is the default, serif faces on offer.
-    @AppStorage("messageFont") private var messageFontKey = "system"
+    /// reader's choice. Default = Apple's serif reading face, New York —
+    /// "the Apple SF I liked" (Ranny); plain SF stays one tap away.
+    @AppStorage("messageFont") private var messageFontKey = "newyork"
     @AppStorage("messageFontSize") private var messageFontSize = 17.0
     private let faded: Double = 0.4
 
     private var messageFont: Font {
         switch messageFontKey {
-        case "newyork": return .system(size: messageFontSize, design: .serif)
+        case "system": return .system(size: messageFontSize)
+        case "mono": return .system(size: messageFontSize, design: .monospaced)
+        case "menlo": return .custom("Menlo", size: messageFontSize)
+        case "iowan": return .custom("Iowan Old Style", size: messageFontSize)
         case "charter": return .custom("Charter", size: messageFontSize)
         case "georgia": return .custom("Georgia", size: messageFontSize)
         case "palatino": return .custom("Palatino", size: messageFontSize)
-        default: return .system(size: messageFontSize)
+        case "ubuntu": return .custom("Ubuntu", size: messageFontSize)
+        default: return .system(size: messageFontSize, design: .serif)   // newyork
         }
     }
 

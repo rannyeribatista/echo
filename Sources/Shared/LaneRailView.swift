@@ -1,14 +1,16 @@
 import SwiftUI
 
 /// The stories rail — the window's first element, top to bottom (cockpit sit
-/// 2026-08-21): one fluid ORB per open lane, the AI-assistant identity
-/// (Ranny, iteration close: "where the assistant feeling comes along").
-/// The orb's COLOR carries the lane's harness state (the ring died with it):
-/// teal working · orange attention · violet finished-with-unheard · slate
-/// ready · gray ghost. Working lanes swirl continuously; the speaking lane
-/// breathes with the live audio level; stopped lanes sit still. The dot
-/// marks unheard messages; the star marks the main orchestrator. Tap opens
-/// the lane's pane; the context menu renames or promotes.
+/// 2026-08-21): one fluid ORB per open lane, the AI-assistant identity.
+/// Orb v2 (Ranny's direction): a HOLLOW sphere of something fluid — a nearly
+/// clear heart with color gathering at the rim, a morphing liquid line and
+/// drifting particles inside, two translucent swirls over it. No initials,
+/// no rings: STATUS is the color (teal working · orange attention · violet
+/// finished-with-unheard · slate ready · gray ghost), and color changes
+/// tween fluidly instead of snapping. Working lanes swirl; the speaking lane
+/// breathes with the live audio level; stopped lanes hold a still
+/// constellation. The unheard dot sits beside the name now, half its old
+/// size, leaving the sphere clean.
 struct LaneInfo: Identifiable {
     let id: String          // lane key ("" = untagged legacy clips)
     let name: String        // display name (custom or prettified basename)
@@ -36,7 +38,7 @@ struct LaneRailView: View {
             ? client.nowPlayingClip?.lane : nil
         if !lanes.isEmpty {
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
                     ForEach(lanes) { info in
                         LaneCircle(info: info,
                                    isSpeaking: info.id == speakingLane,
@@ -76,8 +78,8 @@ struct LaneRailView: View {
     }
 }
 
-/// One lane's orb: layered swirling gradients clipped to a sphere — status
-/// picks the palette, a lane-keyed tint keeps identity, motion means life.
+/// One lane's orb + its name. The sphere is pure status-and-motion; identity
+/// lives in a lane-keyed tint woven through the swirl and in the name below.
 struct LaneCircle: View {
     let info: LaneInfo
     let isSpeaking: Bool
@@ -93,30 +95,31 @@ struct LaneCircle: View {
     var body: some View {
         Button(action: open) {
             VStack(spacing: 4) {
-                ZStack(alignment: .topTrailing) {
-                    orb
-                        .frame(width: 54, height: 54)
-                        .overlay(alignment: .bottomTrailing) {
-                            if info.isMain {
-                                Image(systemName: "star.circle.fill")
-                                    .font(.system(size: 15))
-                                    .symbolRenderingMode(.multicolor)
-                                    .background(Circle().fill(.background))
-                            }
+                orb
+                    .frame(width: 54, height: 54)
+                    .overlay(alignment: .bottomTrailing) {
+                        if info.isMain {
+                            Image(systemName: "star.circle.fill")
+                                .font(.system(size: 15))
+                                .symbolRenderingMode(.multicolor)
+                                .background(Circle().fill(.background))
                         }
+                    }
+                HStack(spacing: 4) {
                     if info.unplayed > 0 {
                         Circle().fill(Color.accentColor)
-                            .frame(width: 9, height: 9)
+                            .frame(width: 5, height: 5)
                     }
+                    Text(info.displayName)
+                        .font(.caption2)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .foregroundStyle(info.isOpen ? AnyShapeStyle(.tint)
+                                                     : AnyShapeStyle(.secondary))
+                        .opacity(info.isGhost ? 0.6 : 1)
                 }
-                Text(info.displayName)
-                    .font(.caption2)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 64)
-                    .foregroundStyle(info.isOpen ? AnyShapeStyle(.tint)
-                                                 : AnyShapeStyle(.secondary))
-                    .opacity(info.isGhost ? 0.6 : 1)
+                .frame(width: 76)
             }
         }
         .buttonStyle(.plain)
@@ -134,58 +137,84 @@ struct LaneCircle: View {
         .help(helpText)
     }
 
-    /// The fluid sphere: a radial base with two counter-rotating blurred
-    /// angular swirls. TimelineView pauses entirely for still lanes, so idle
-    /// orbs cost nothing.
+    /// The hollow fluid sphere. TimelineView pauses entirely for still lanes,
+    /// so idle orbs cost nothing; at phase 0 the line and particles hold a
+    /// still constellation.
     private var orb: some View {
         TimelineView(.animation(minimumInterval: 1 / 24, paused: !animated)) { tl in
-            let phase = animated ? tl.date.timeIntervalSinceReferenceDate : 0
-            ZStack {
-                Circle().fill(RadialGradient(
-                    colors: [palette.light, palette.dark],
-                    center: UnitPoint(x: 0.38, y: 0.3),
-                    startRadius: 2, endRadius: 32))
-                Circle()
-                    .fill(AngularGradient(
-                        colors: [.clear, palette.swirl.opacity(0.85), .clear,
-                                 .white.opacity(0.28), .clear],
-                        center: .center))
-                    .rotationEffect(.radians(phase * 0.8))
-                    .blur(radius: 5)
-                Circle()
-                    .fill(AngularGradient(
-                        colors: [.clear, identityTint.opacity(0.5), .clear],
-                        center: .center))
-                    .rotationEffect(.radians(-phase * 1.35 + 2))
-                    .blur(radius: 7)
-                Text(initials)
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white)
-                    .opacity(info.isGhost ? 0.7 : 0.95)
-                    .shadow(color: .black.opacity(0.35), radius: 1.5)
-            }
-            .clipShape(Circle())
-            .overlay {
-                Circle().strokeBorder(.white.opacity(info.isOpen ? 0.85 : 0.12),
-                                      lineWidth: info.isOpen ? 1.5 : 0.5)
-            }
-            .scaleEffect(1 + (isSpeaking ? min(level, 1) * 0.22 : 0))
-            .animation(.easeOut(duration: 0.12), value: level)
-            .opacity(info.isGhost ? 0.5 : 1)
+            orbBody(phase: animated ? tl.date.timeIntervalSinceReferenceDate : 0)
         }
     }
 
-    /// Two letters of identity: first letters of the first two words of the
-    /// display name, else the first two characters.
-    private var initials: String {
-        let words = info.name.split(separator: " ")
-        if words.count >= 2 {
-            return (words[0].prefix(1) + words[1].prefix(1)).uppercased()
+    @ViewBuilder private func orbBody(phase: Double) -> some View {
+        let pal = palette
+        let seed = Self.stableHue(info.id) * 6.28318
+        ZStack {
+            // Hollow shell: nearly clear heart, color gathering at the rim.
+            Circle().fill(RadialGradient(
+                stops: [.init(color: pal.light.opacity(0.10), location: 0),
+                        .init(color: pal.light.opacity(0.30), location: 0.62),
+                        .init(color: pal.dark.opacity(0.85), location: 1)],
+                center: UnitPoint(x: 0.42, y: 0.36),
+                startRadius: 1, endRadius: 30))
+            // Two translucent liquid swirls.
+            Circle()
+                .fill(AngularGradient(
+                    colors: [.clear, pal.swirl.opacity(0.55), .clear,
+                             .white.opacity(0.18), .clear],
+                    center: .center))
+                .rotationEffect(.radians(phase * 0.8))
+                .blur(radius: 5)
+            Circle()
+                .fill(AngularGradient(
+                    colors: [.clear, identityTint.opacity(0.40), .clear],
+                    center: .center))
+                .rotationEffect(.radians(-phase * 1.35 + 2))
+                .blur(radius: 7)
+            // The fluid interior: one morphing closed line + drifting motes.
+            Canvas { ctx, size in
+                let c = CGPoint(x: size.width / 2, y: size.height / 2)
+                let R = min(size.width, size.height) / 2
+                var line = Path()
+                let n = 72
+                for i in 0...n {
+                    let th = Double(i) / Double(n) * 6.28318
+                    let r = R * (0.52 + 0.11 * sin(3 * th + phase * 1.6 + seed)
+                                      + 0.07 * sin(5 * th - phase * 1.05 + seed * 2))
+                    let pt = CGPoint(x: c.x + CGFloat(cos(th) * r),
+                                     y: c.y + CGFloat(sin(th) * r))
+                    if i == 0 { line.move(to: pt) } else { line.addLine(to: pt) }
+                }
+                line.closeSubpath()
+                ctx.addFilter(.blur(radius: 1.2))
+                ctx.stroke(line, with: .color(pal.swirl.opacity(0.55)), lineWidth: 1.1)
+                for i in 0..<9 {
+                    let fi = Double(i)
+                    let sp = 0.35 + 0.13 * fi.truncatingRemainder(dividingBy: 3)
+                    let ang = phase * sp + seed + fi * 0.7
+                    let rr = R * (0.18 + 0.55 * (0.5 + 0.5 * sin(phase * (0.5 + 0.11 * fi) + fi * 1.9 + seed)))
+                    let pt = CGPoint(x: c.x + CGFloat(cos(ang) * rr),
+                                     y: c.y + CGFloat(sin(ang) * rr))
+                    let d = 1.6 + 1.4 * (0.5 + 0.5 * sin(fi * 2.3 + phase * 0.8))
+                    ctx.fill(Path(ellipseIn: CGRect(x: pt.x - d / 2, y: pt.y - d / 2,
+                                                    width: d, height: d)),
+                             with: .color((i % 3 == 0 ? Color.white : pal.swirl).opacity(0.55)))
+                }
+            }
         }
-        return String(info.name.prefix(2)).uppercased()
+        .clipShape(Circle())
+        .scaleEffect(1 + (isSpeaking ? min(level, 1) * 0.22 : 0))
+        .animation(.easeOut(duration: 0.12), value: level)
+        // Status changes flow, never snap (Ranny): tween the whole palette.
+        .animation(.easeInOut(duration: 0.9), value: paletteKey)
+        .opacity(info.isGhost ? 0.5 : 1)
     }
 
-    /// Status IS the color now (the ring is gone — Ranny, iteration close).
+    private var paletteKey: String {
+        "\(info.state ?? "-")|\(info.unplayed > 0)|\(info.isGhost)"
+    }
+
+    /// Status IS the color (the ring died with orb v1 already).
     private var palette: (light: Color, dark: Color, swirl: Color) {
         if info.isGhost {
             return (Color(white: 0.55), Color(white: 0.32), Color(white: 0.65))

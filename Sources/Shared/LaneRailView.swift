@@ -73,6 +73,16 @@ struct BulgeCircle: InsettableShape {
 
 struct LaneRailView: View {
     @ObservedObject var client: EchoClient
+
+    /// The featured sphere runs bigger on the phone (Ranny: +15% over the
+    /// Mac's featured size).
+    static var featuredUnit: Double {
+        #if os(iOS)
+        1.32
+        #else
+        1.15
+        #endif
+    }
     @State private var renamingLane: String?
     @State private var renameText = ""
 
@@ -82,13 +92,14 @@ struct LaneRailView: View {
             ? client.nowPlayingClip?.lane : nil
         if !lanes.isEmpty {
             VStack(spacing: 6) {
+                let featuredUnit = Self.featuredUnit
                 if let featured = lanes.first(where: { $0.isOpen }) {
                     // In-place morph, not a cross-container flight: matched
                     // geometry breaks across a ScrollView (clipped traveler,
                     // stale-frame pairing — Ranny's artifact). The promoted
                     // orb grows into this slot; the demoted one shrinks into
                     // the row.
-                    circle(featured, speakingLane: speakingLane, unit: 1.15)
+                    circle(featured, speakingLane: speakingLane, unit: featuredUnit)
                         .id(featured.id)
                         .transition(.scale(scale: 0.45).combined(with: .opacity))
                         .frame(maxWidth: .infinity)
@@ -326,9 +337,15 @@ struct LaneOrbView: View {
                         let yr: Double = x0 * sinA + y0 * cosA
                         pts.append(CGPoint(x: cx + xr, y: cy + yr))
                     }
-                    // Spectral dispersion: parallel slivers of the spectrum.
-                    let spectrum: [(Double, Double)] = [(-2.4 * u, 0.50), (-1.2 * u, 0.83),
-                                                        (0, 0.33), (1.2 * u, 0.12), (2.4 * u, 0.66)]
+                    // Prism dispersion, as LIGHT: warm hues fan to one side
+                    // of the core, cool to the other (a real prism's order),
+                    // and everything draws additively — the filament brightens
+                    // whatever it crosses instead of painting over it (the
+                    // blueish-darkening artifact Ranny diagnosed).
+                    let spectrum: [(Double, Double)] = [
+                        (-3.0 * u, 0.02), (-1.9 * u, 0.09), (-0.9 * u, 0.16),
+                        (0.9 * u, 0.34), (1.9 * u, 0.55), (3.0 * u, 0.78)
+                    ]
                     for (off, hue) in spectrum {
                         var path = Path()
                         for (i, pt) in pts.enumerated() {
@@ -336,28 +353,33 @@ struct LaneOrbView: View {
                             if i == 0 { path.move(to: q) } else { path.addLine(to: q) }
                         }
                         ctx.stroke(path,
-                                   with: .color(Color(hue: hue, saturation: 0.85,
-                                                      brightness: 1).opacity(0.45 * alpha)),
-                                   lineWidth: 2.2 * u)
+                                   with: .color(Color(hue: hue, saturation: 0.9,
+                                                      brightness: 1).opacity(0.38 * alpha)),
+                                   lineWidth: 1.9 * u)
                     }
                     // The light itself: graded core, near FULL WHITE at the
                     // ribbon's strongest reach, dimming toward the poles.
-                    // Overlapping 3-point segments: short-segment beading
-                    // shows at icon scale; overlap melts it into a filament.
+                    // The heart, two additive passes (overlapping 3-point
+                    // segments so nothing beads): a status-tinted halo, then a
+                    // near-pure-white core burning at the strongest reach.
                     for i in 0..<(pts.count - 2) {
                         let t01 = Double(i) / Double(m)
                         let e = pow(sin(t01 * Double.pi), 1.6)
-                        let a = (0.13 + 0.45 * e) * alpha
                         var seg = Path()
                         seg.move(to: pts[i])
                         seg.addLine(to: pts[i + 1])
                         seg.addLine(to: pts[i + 2])
-                        ctx.stroke(seg, with: .color(pal.core.opacity(a)),
-                                   lineWidth: (1.3 + 1.3 * e) * u)
+                        ctx.stroke(seg,
+                                   with: .color(pal.core.opacity((0.10 + 0.34 * e) * alpha)),
+                                   lineWidth: (2.0 + 1.6 * e) * u)
+                        ctx.stroke(seg,
+                                   with: .color(Color.white.opacity((0.12 + 0.62 * e) * alpha)),
+                                   lineWidth: (0.9 + 0.9 * e) * u)
                     }
                 }
 
                 ctx.addFilter(.blur(radius: max(1.3 * bl, 0.7)))
+                ctx.blendMode = .plusLighter        // the filament EMITS
                 ribbon(longitude: longitude, wobSeed: seed, alpha: 1)
                 ribbon(longitude: longitude + 2.3, wobSeed: seed * 3 + 1.7, alpha: 0.55)
             }

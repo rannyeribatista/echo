@@ -415,6 +415,7 @@ struct TranscriptView: View {
     @ViewBuilder private func page(for clip: Clip) -> some View {
         VStack(spacing: 8) {
             pageHeader(clip)
+            #if os(macOS)
             GeometryReader { box in
                 MessageBlock(client: client, clip: clip)
                     .frame(width: box.size.width)
@@ -429,6 +430,13 @@ struct TranscriptView: View {
                     .contentShape(Rectangle())
                     .preference(key: BoxHeightKey.self, value: box.size.height)
             }
+            #else
+            // iOS: native scrolling inside the page — the Mac's wheel-driven
+            // offset machinery fought the inner ScrollView and froze it.
+            ScrollView {
+                MessageBlock(client: client, clip: clip)
+            }
+            #endif
         }
         .onPreferenceChange(BoxHeightKey.self) { h in
             #if os(macOS)
@@ -500,13 +508,7 @@ private struct MessageBlock: View {
 
     private var isLive: Bool { client.nowPlayingClip?.id == clip.id }
 
-    var body: some View {
-        #if os(macOS)
-        content
-        #else
-        ScrollView { content }
-        #endif
-    }
+    var body: some View { content }
 
     private var content: some View {
         VStack(alignment: .center, spacing: 12) {

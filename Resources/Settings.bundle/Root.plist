@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>StringsTable</key><string>Root</string>
+  <key>PreferenceSpecifiers</key>
+  <array>
+    <dict><key>Type</key><string>PSGroupSpecifier</string><key>Title</key><string>This Mac's Echo server</string></dict>
+    <dict><key>Type</key><string>PSTextFieldSpecifier</string><key>Key</key><string>macHost</string><key>Title</key><string>Host</string><key>DefaultValue</key><string></string><key>KeyboardType</key><string>NumbersAndPunctuation</string><key>AutocorrectionType</key><string>No</string><key>AutocapitalizationType</key><string>None</string></dict>
+    <dict><key>Type</key><string>PSTextFieldSpecifier</string><key>Key</key><string>macPort</string><key>Title</key><string>Port</string><key>DefaultValue</key><string>8790</string><key>KeyboardType</key><string>NumberPad</string></dict>
+    <dict><key>Type</key><string>PSTextFieldSpecifier</string><key>Key</key><string>token</string><key>Title</key><string>Shared token</string><key>DefaultValue</key><string></string><key>IsSecure</key><true/><key>AutocorrectionType</key><string>No</string><key>AutocapitalizationType</key><string>None</string></dict>
+    <dict><key>Type</key><string>PSGroupSpecifier</string><key>Title</key><string>Appearance</string></dict>
+    <dict><key>Type</key><string>PSMultiValueSpecifier</string><key>Key</key><string>appTheme</string><key>Title</key><string>Theme</string><key>DefaultValue</key><string>auto</string>
+      <key>Titles</key><array><string>Auto</string><string>Light</string><string>Dark</string></array>
+      <key>Values</key><array><string>auto</string><string>light</string><string>dark</string></array></dict>
+    <dict><key>Type</key><string>PSMultiValueSpecifier</string><key>Key</key><string>darkGround</string><key>Title</key><string>Dark ground</string><key>DefaultValue</key><string>status</string>
+      <key>Titles</key><array><string>Status tint</string><string>Gray</string></array>
+      <key>Values</key><array><string>status</string><string>gray</string></array></dict>
+    <dict><key>Type</key><string>PSGroupSpecifier</string><key>Title</key><string>Reading</string></dict>
+    <dict><key>Type</key><string>PSMultiValueSpecifier</string><key>Key</key><string>messageFont</string><key>Title</key><string>Message font</string><key>DefaultValue</key><string>newyork</string>
+      <key>Titles</key><array><string>Apple Serif — New York</string><string>Apple Sans — SF</string><string>SF Mono</string><string>Menlo</string><string>Ubuntu</string><string>Iowan Old Style</string><string>Charter</string><string>Georgia</string><string>Palatino</string></array>
+      <key>Values</key><array><string>newyork</string><string>system</string><string>mono</string><string>menlo</string><string>ubuntu</string><string>iowan</string><string>charter</string><string>georgia</string><string>palatino</string></array></dict>
+    <dict><key>Type</key><string>PSSliderSpecifier</string><key>Key</key><string>messageFontSize</string><key>DefaultValue</key><real>17</real><key>MinimumValue</key><real>13</real><key>MaximumValue</key><real>24</real></dict>
+  </array>
+</dict>
+</plist>

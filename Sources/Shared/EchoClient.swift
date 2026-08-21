@@ -137,6 +137,17 @@ final class EchoClient: ObservableObject {
     @Published var awaitingRender = false     // want the next chunk; the Mac hasn't finished it
     /// Newest-first history of the last 24 hours, persisted across launches.
     @Published var clips: [Clip] = []
+    /// COCKPIT RAIL (2026-08-21). The lane whose pane fills the window — the
+    /// only lane that sounds aloud besides the main orchestrator. nil until
+    /// the first message adopts its lane (fresh install = pre-rail behavior).
+    @Published private(set) var openLane: String?
+    /// The main orchestrator lane, if promoted (A10 "both"): its voice leads
+    /// while every other lane queues silently to its pane.
+    @Published private(set) var mainLane: String?
+    /// Per-lane harness state from the server's /v2/status feed (A9 table:
+    /// ready|working|attention|finished|closed). Empty against an old server —
+    /// the rail degrades to unplayed-dot rings.
+    @Published private(set) var laneStates: [String: LaneStatusEntry] = [:]
 
     let log = EchoLog.shared
     private let store = ClipStore()
@@ -156,7 +167,10 @@ final class EchoClient: ObservableObject {
     init() {
         clips = store.purge(store.load())
         store.save(clips)                    // persist the pruned index too
-        openClip = clips.first               // the window always opens on the latest message
+        openLane = UserDefaults.standard.string(forKey: "openLane") ?? clips.first?.lane
+        mainLane = UserDefaults.standard.string(forKey: "mainLane")
+        // The window opens on the open lane's latest message.
+        openClip = clips.first(where: { $0.lane == openLane }) ?? clips.first
         #if os(macOS)
         // Come up listening (2026-08-08). Init-time rather than onAppear so
         // listening never depends on any particular view tree appearing —
@@ -194,6 +208,9 @@ final class EchoClient: ObservableObject {
         return d
     }()
     private var task: Task<Void, Never>?
+    /// The /v2/status long-poll loop — separate task, shares the session.
+    private var statusTask: Task<Void, Never>?
+    private var statusSeq = 0
     private lazy var session = EchoClient.makeSession()
     private var lastPollAt = Date()
 
@@ -210,7 +227,10 @@ final class EchoClient: ObservableObject {
         #endif
         cfg.timeoutIntervalForRequest = 70
         cfg.timeoutIntervalForResource = 120
-        cfg.httpMaximumConnectionsPerHost = 1
+        // 2, not 1: the message loop and the status loop each hold a long-poll
+        // open — one shared connection would serialize them (a status change
+        // would wait out /v2/next's 55s hold before it could even ask).
+        cfg.httpMaximumConnectionsPerHost = 2
         return URLSession(configuration: cfg)
     }
 
@@ -253,6 +273,94 @@ final class EchoClient: ObservableObject {
     }
 
     var unplayedCount: Int { clips.filter { $0.playedAt == nil }.count }
+
+    // MARK: - Lanes (the stories rail)
+
+    /// The rail's circles: every lane seen in the 24h history plus every lane
+    /// the status feed knows (closed lanes only linger while they still have
+    /// clips to consult). Main first, then by latest activity.
+    var lanes: [LaneInfo] {
+        var activity: [String: Date] = [:]
+        var unplayed: [String: Int] = [:]
+        for c in clips {
+            activity[c.lane] = max(activity[c.lane] ?? .distantPast, c.displayedAt)
+            if c.playedAt == nil { unplayed[c.lane, default: 0] += 1 }
+        }
+        for (lane, st) in laneStates {
+            if st.state == "closed" && activity[lane] == nil { continue }
+            let d = Date(timeIntervalSince1970: st.ts ?? 0)
+            activity[lane] = max(activity[lane] ?? .distantPast, d)
+        }
+        return activity.keys.map { key in
+            LaneInfo(id: key,
+                     state: laneStates[key]?.state,
+                     unplayed: unplayed[key] ?? 0,
+                     lastActivity: activity[key] ?? .distantPast,
+                     isMain: key == mainLane,
+                     isOpen: key == openLane)
+        }
+        .sorted { a, b in
+            if a.isMain != b.isMain { return a.isMain }
+            return a.lastActivity > b.lastActivity
+        }
+    }
+
+    /// The lanes allowed to make sound: the open pane plus the main
+    /// orchestrator (A10). Everything else queues silently and lights its ring.
+    private var soundingLanes: Set<String> {
+        var s = Set<String>()
+        if let l = openLane { s.insert(l) }
+        if let l = mainLane { s.insert(l) }
+        return s
+    }
+
+    /// Tap on a circle: this lane's pane fills the window and its unheard
+    /// backlog plays oldest-first — "sit and wait until I get back to that
+    /// pane" ends now. Queued behind whatever is already sounding, never
+    /// cutting it (the standing walkie rule).
+    func selectLane(_ lane: String) {
+        setOpenLane(lane)
+        if let newest = clips.first(where: { $0.lane == lane }) {
+            openClip = newest
+        }
+        guard autoPlay else { return }
+        let backlog = clips.filter { $0.lane == lane && $0.playedAt == nil }.reversed()
+        guard !backlog.isEmpty else { return }
+        if nowPlayingClip == nil {
+            let rest = backlog.dropFirst()
+            if let first = backlog.first { play(first) }
+            pendingAutoPlay.append(contentsOf: rest.map(\.id)
+                .filter { !pendingAutoPlay.contains($0) })
+        } else {
+            pendingAutoPlay.append(contentsOf: backlog.map(\.id)
+                .filter { !pendingAutoPlay.contains($0) })
+        }
+    }
+
+    private func setOpenLane(_ lane: String?) {
+        openLane = lane
+        UserDefaults.standard.set(lane, forKey: "openLane")
+    }
+
+    /// Promote (or clear) the main orchestrator. Routing is the app's; the
+    /// coordinator ROLE stays the owner file's (One Echo A5: the files remain
+    /// the sessions' interchange) — on the Mac we sync it when the lane's
+    /// session is known, and the "claim the voice" ritual in that session is
+    /// unchanged (the A10 v0 call). Clearing main deliberately leaves the
+    /// owner file alone: mailbox routing keeps working for the last coordinator.
+    func setMainLane(_ lane: String?) {
+        mainLane = lane
+        UserDefaults.standard.set(lane, forKey: "mainLane")
+        log.add(lane.map { "main orchestrator: \($0)" } ?? "main orchestrator cleared")
+        #if os(macOS)
+        if let lane, let session = laneStates[lane]?.session, !session.isEmpty {
+            let ownerURL = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".claude/voice/owner")
+            try? (session + "\n").write(to: ownerURL, atomically: true, encoding: .utf8)
+            log.add("owner file → \(session.prefix(8)) (\(lane))")
+        }
+        #endif
+    }
 
     /// The one line the main screen shows.
     var statusText: String {
@@ -300,12 +408,15 @@ final class EchoClient: ObservableObject {
             self.state = .degraded("Audio keep-alive failed — background playback may stop.")
         }
         task = Task { await loop() }
+        statusTask = Task { await statusLoop() }
     }
 
     func stop() {
         UserDefaults.standard.set(false, forKey: "autoListen")
         task?.cancel()
         task = nil
+        statusTask?.cancel()
+        statusTask = nil
         session.invalidateAndCancel()
         session = EchoClient.makeSession()
         ducker.endListening()            // stop keep-alive + release the audio session
@@ -351,6 +462,19 @@ final class EchoClient: ObservableObject {
         let lane: String?
         let label: String?
         let ts: Double?
+    }
+
+    /// One lane's entry in the /v2/status snapshot (cockpit rail).
+    struct LaneStatusEntry: Decodable, Equatable {
+        let state: String       // ready|working|attention|finished|closed
+        let session: String?
+        let ts: Double?
+    }
+
+    /// The /v2/status long-poll answer: a fold counter + the full snapshot.
+    private struct StatusSnapshot: Decodable {
+        let seq: Int
+        let lanes: [String: LaneStatusEntry]
     }
 
     /// Shape of a v2 stream manifest (nic-tts.py writes it, echo-server serves
@@ -613,6 +737,40 @@ final class EchoClient: ObservableObject {
         }
     }
 
+    /// Follow the lane-state feed. 404 = pre-rail server: rings stay dark and
+    /// we re-probe lazily (the rest of the rail still works off history lanes).
+    /// Errors here never touch the connection state line — the message loop
+    /// owns that story; this feed is decoration on top of it.
+    private func statusLoop() async {
+        var fails = 0
+        while !Task.isCancelled {
+            do {
+                let (code, data) = try await v2Get("/v2/status?since=\(statusSeq)")
+                switch code {
+                case 200:
+                    fails = 0
+                    if let snap = try? JSONDecoder().decode(StatusSnapshot.self, from: data) {
+                        statusSeq = snap.seq
+                        laneStates = snap.lanes
+                    }
+                case 204:
+                    fails = 0
+                case 404:
+                    try? await Task.sleep(nanoseconds: 120_000_000_000)
+                case 401:
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                default:
+                    fails += 1
+                    try? await Task.sleep(nanoseconds: backoff(fails))
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                fails += 1
+                try? await Task.sleep(nanoseconds: backoff(fails))
+            }
+        }
+    }
+
     /// Cache the shared end-of-message "Over" clip (rendered once on the Mac).
     private func fetchOverIfMissing() async {
         guard store.overURL() == nil else { return }
@@ -634,7 +792,7 @@ final class EchoClient: ObservableObject {
         if let id = openClip?.id, let c = clips.first(where: { $0.id == id }) {
             openClip = c
         } else if openClip != nil {
-            openClip = clips.first
+            openClip = clips.first(where: { $0.lane == openLane }) ?? clips.first
         }
     }
 
@@ -680,12 +838,22 @@ final class EchoClient: ObservableObject {
 
     // MARK: - Playback
 
-    /// A message arrived while listening. Playing → it queues (never cuts the
-    /// current audio); parked silent at a gate → the new message takes over
-    /// (the parked one keeps its unplayed dot and replays from history);
+    /// A message arrived while listening. RAIL GATE first (2026-08-21): only
+    /// the open lane and the main orchestrator may sound — anything else sits
+    /// silently in its pane and lights its ring (selectLane plays the backlog
+    /// when he gets there). Then the walkie rules, unchanged: playing → it
+    /// queues (never cuts the current audio); parked silent at a gate → the
+    /// new message takes over (the parked one keeps its unplayed dot);
     /// otherwise it plays now. Auto-play off → it just waits in the list.
     private func autoPlayArrived(_ clip: Clip) {
+        if openLane == nil {
+            setOpenLane(clip.lane)   // first message ever: its lane becomes the pane
+        }
         guard autoPlay else { return }
+        guard soundingLanes.contains(clip.lane) else {
+            log.add("lane \(clip.lane.isEmpty ? "untagged" : clip.lane) queued silently (pane not open)")
+            return
+        }
         if nowPlayingClip == nil {
             play(clip)
         } else if awaitingContinue {
@@ -847,7 +1015,10 @@ final class EchoClient: ObservableObject {
         guard autoPlay else { pendingAutoPlay = []; return }
         while let nextId = pendingAutoPlay.first {
             pendingAutoPlay.removeFirst()
-            if let c = clips.first(where: { $0.id == nextId }) {
+            // A queued item whose lane he switched away from stays as an
+            // unplayed dot instead of suddenly sounding from a closed pane.
+            if let c = clips.first(where: { $0.id == nextId }),
+               soundingLanes.contains(c.lane) {
                 play(c)
                 return
             }

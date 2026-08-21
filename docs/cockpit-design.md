@@ -90,6 +90,13 @@ One Echo's P2 shim direction arriving early, not new architecture.
 
 ## Build spec — the stories rail (dispatch-ready)
 
+> **Status: BUILT 2026-08-21, same sit** ("ship it" — Ranny), on `design/cockpit`
+> (echo) + `feature/cockpit-rail` (core). Both app targets compile; the server
+> state machine, status shim, worker fall-through, and scoped hush are proven
+> 25/25 by an end-to-end run on an alternate port with an isolated outbox
+> (live pipeline untouched). App-side E2E is the deploy moment: rebuild + sign
+> both apps, wire the status hooks, then `ECHO_ALL_LANES=on`.
+
 **Outcome:** the rail live in both apps, per-lane audio gating, status rings,
 main-orchestrator toggle. ≈ 2½–3½ lane-days, four independently shippable layers.
 

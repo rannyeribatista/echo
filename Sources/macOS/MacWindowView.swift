@@ -13,6 +13,11 @@ struct MacWindowView: View {
 
     var body: some View {
         VStack(spacing: 10) {
+            // The stories rail — the window's first element (cockpit sit):
+            // one circle per open lane; tap = that lane's pane fills the
+            // window below and becomes the lane that sounds.
+            LaneRailView(client: client)
+
             HStack(spacing: 8) {
                 Circle().fill(stateColor).frame(width: 9, height: 9)
                 Text(client.statusText)
@@ -56,15 +61,17 @@ struct MacWindowView: View {
                 ActiveMessageCard(client: client, clip: open)
             }
 
-            if client.clips.isEmpty {
+            if visibleClips.isEmpty {
                 Spacer()
-                Text("No messages in the last 24 hours.")
+                Text(client.openLane == nil || client.clips.isEmpty
+                     ? "No messages in the last 24 hours."
+                     : "No messages from this lane in the last 24 hours.")
                     .font(.footnote).foregroundStyle(.secondary)
                 Spacer()
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2) {
-                        ForEach(client.clips) { clip in
+                        ForEach(visibleClips) { clip in
                             ClipRow(clip: clip, isOpen: clip.id == client.openClip?.id) {
                                 client.play(clip)
                             }
@@ -76,6 +83,12 @@ struct MacWindowView: View {
         .padding(12)
         .frame(minWidth: 340, minHeight: 420)
         .sheet(isPresented: $showSettings) { MacSettingsView(client: client) }
+    }
+
+    /// The open lane's history (all of it when no lane is open yet).
+    private var visibleClips: [Clip] {
+        guard let lane = client.openLane else { return client.clips }
+        return client.clips.filter { $0.lane == lane }
     }
 
     /// Same truth-telling as the iPhone's emoji: green only when the

@@ -10,6 +10,10 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
+                // The stories rail (cockpit sit) — same shared view as the Mac.
+                LaneRailView(client: client)
+                    .padding(.horizontal)
+
                 statusCard
 
                 Toggle("Always-on (auto-play)", isOn: $autoPlay)
@@ -37,16 +41,18 @@ struct ContentView: View {
                         .padding(.horizontal)
                 }
 
-                if client.clips.isEmpty {
+                if visibleClips.isEmpty {
                     Spacer()
-                    Text("No messages in the last 24 hours.")
+                    Text(client.openLane == nil || client.clips.isEmpty
+                         ? "No messages in the last 24 hours."
+                         : "No messages from this lane in the last 24 hours.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Spacer()
                 } else {
-                    // 24h history, newest first. Tap any row to (re)play it.
+                    // The open lane's 24h history, newest first. Tap to (re)play.
                     List {
                         Section("Last 24 hours") {
-                            ForEach(client.clips) { clip in
+                            ForEach(visibleClips) { clip in
                                 ClipRow(clip: clip, isOpen: clip.id == client.openClip?.id) {
                                     client.play(clip)
                                 }
@@ -70,6 +76,12 @@ struct ContentView: View {
                 if phase == .active { client.appBecameActive() }
             }
         }
+    }
+
+    /// The open lane's history (all of it when no lane is open yet).
+    private var visibleClips: [Clip] {
+        guard let lane = client.openLane else { return client.clips }
+        return client.clips.filter { $0.lane == lane }
     }
 
     private var statusCard: some View {

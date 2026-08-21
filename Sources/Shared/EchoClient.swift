@@ -173,7 +173,6 @@ final class EchoClient: ObservableObject {
         mainLane = UserDefaults.standard.string(forKey: "mainLane")
         // The window opens on the open lane's latest message.
         openClip = clips.first(where: { $0.lane == openLane }) ?? clips.first
-        #if os(macOS)
         // Come up listening (2026-08-08). Init-time rather than onAppear so
         // listening never depends on any particular view tree appearing —
         // true for the original menu-bar popover (nothing rendered until
@@ -183,12 +182,12 @@ final class EchoClient: ObservableObject {
         // audio and network stacks this class otherwise keeps deliberately lazy.
         // Default true, so a fresh install listens; only an explicit "Stop
         // listening" clears it, and that choice now survives a relaunch.
-        // macOS only — the iPhone's battery and background rules make
-        // listen-on-launch a different decision, and nobody asked for it.
+        // Both platforms since the cockpit phone pass (2026-08-21): the
+        // listen toggle left the iPhone UI, so opening the app IS the intent
+        // to listen — same as the Mac.
         if UserDefaults.standard.object(forKey: "autoListen") as? Bool ?? true {
             Task { [weak self] in self?.start() }
         }
-        #endif
     }
 
     // Lazy so launching the app touches neither the audio nor the network stack —

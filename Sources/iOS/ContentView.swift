@@ -20,14 +20,6 @@ struct ContentView: View {
                         .padding(.horizontal)
                 }
 
-                statusCard
-
-                Button(client.isListening ? "Stop listening" : "Start listening") {
-                    client.toggleListening()
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-
                 // The transport rides fixed on top; the transcript below is
                 // the whole content area — the open lane's messages,
                 // chat-style, current one at the bottom (cockpit drive).
@@ -47,7 +39,7 @@ struct ContentView: View {
                 }
             }
             .padding(.top)
-            .navigationTitle("Echo")
+            .navigationTitle("").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 Button { showSettings = true } label: {
                     Image(systemName: "gearshape")
@@ -62,32 +54,17 @@ struct ContentView: View {
         }
     }
 
+    // Status card + listen toggle died in the cockpit cleanup (Ranny, phone
+    // pass): the app comes up listening on its own now, orbs carry the state,
+    // and Settings keeps the log for diagnosis.
+
     /// The open lane's history (all of it when no lane is open yet).
     private var visibleClips: [Clip] {
         guard let lane = client.openLane else { return client.clips }
         return client.clips.filter { $0.lane == lane }
     }
 
-    private var statusCard: some View {
-        VStack(spacing: 6) {
-            Text(stateEmoji).font(.system(size: 44))
-            Text(client.statusText)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-        }
-    }
 
-    /// Green only when the connection is genuinely healthy — yellow/red mean
-    /// what the label under them says.
-    private var stateEmoji: String {
-        guard client.isListening else { return "⚪️" }
-        switch client.state {
-        case .degraded: return "🟡"
-        case .error: return "🔴"
-        default: return "🟢"
-        }
-    }
 }
 
 // ClipRow / LaneChip / PulsingDot / ActiveMessageCard live in

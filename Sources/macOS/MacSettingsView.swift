@@ -15,6 +15,7 @@ struct MacSettingsView: View {
     @AppStorage("macDuckMode") private var duckMode = "tap"
     @AppStorage("duckGain") private var duckGain = 0.16
     @AppStorage("appTheme") private var appTheme = "auto"
+    @AppStorage("darkGround") private var darkGround = "status"
     @AppStorage("messageFont") private var messageFont = "newyork"
     @AppStorage("messageFontSize") private var messageFontSize = 17.0
     @ObservedObject private var log = EchoLog.shared
@@ -47,6 +48,11 @@ struct MacSettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .onChange(of: appTheme) { _, t in Self.applyTheme(t) }
+                    Picker("Dark ground", selection: $darkGround) {
+                        Text("Status tint").tag("status")
+                        Text("Gray").tag("gray")
+                    }
+                    .pickerStyle(.segmented)
                 }
                 Section("Reading") {
                     Picker("Message font", selection: $messageFont) {

@@ -12,6 +12,11 @@ final class EchoMacDelegate: NSObject, NSApplicationDelegate {
     let server = ServerController()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Icon export mode: render the real orb and leave — no server, no UI.
+        if IconExporter.runIfRequested() {
+            NSApp.terminate(nil)
+            return
+        }
         MacSettingsView.applyTheme(UserDefaults.standard.string(forKey: "appTheme") ?? "auto")
         server.log = { EchoLog.shared.add("server: \($0)") }
         server.ensureRunning()

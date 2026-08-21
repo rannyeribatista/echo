@@ -225,8 +225,10 @@ struct LaneCircle: View {
     private var orb: some View {
         TimelineView(.animation(minimumInterval: 1 / 24,
                                 paused: !(animated || coasting))) { tl in
-            orbBody(phase: (animated || coasting)
-                    ? tl.date.timeIntervalSinceReferenceDate : 0)
+            LaneOrbView(info: info, unit: unit,
+                        phase: (animated || coasting)
+                        ? tl.date.timeIntervalSinceReferenceDate : 0,
+                        isSpeaking: isSpeaking, level: level)
         }
         // Motion coasts for a beat after speech/work ends instead of freezing
         // mid-swirl.
@@ -241,8 +243,27 @@ struct LaneCircle: View {
         }
     }
 
-    @ViewBuilder private func orbBody(phase: Double) -> some View {
+}
+
+/// The sphere itself, standalone — LaneCircle renders it live through its
+/// TimelineView, and the icon exporter renders the very same view frozen at a
+/// chosen phase (the icon IS the real thing).
+struct LaneOrbView: View {
+    let info: LaneInfo
+    let unit: Double
+    let phase: Double
+    let isSpeaking: Bool
+    let level: Double
+
+    /// Sphere radius at this size.
+    private var sphereR: Double { 27 * unit }
+    private var canvasSide: Double { (27 + 5 + 6) * 2 * unit }
+
+    var body: some View {
         let pal = palette
+        // Blur scales sub-linearly: identical at rail sizes (unit near 1),
+        // crisp instead of washed at icon scale (unit 8+).
+        let bl = pow(unit, 0.58)
         let seed = Self.stableHue(info.id) * 6.28318
         let longitude: Double = phase * 1.2566        // 2π / 5s — full turn every 5s
         let spinAxis: Double = phase * 0.12 + seed    // the poles themselves spin, slowly
@@ -268,14 +289,14 @@ struct LaneCircle: View {
                              .white.opacity(0.14), .clear],
                     center: .center))
                 .rotationEffect(.radians(phase * 0.8))
-                .blur(radius: 5 * u)
+                .blur(radius: 5 * bl)
                 .animation(nil, value: paletteKey)
             Circle()
                 .fill(AngularGradient(
                     colors: [.clear, identityTint.opacity(0.30), .clear],
                     center: .center))
                 .rotationEffect(.radians(-phase * 1.35 + 2))
-                .blur(radius: 7 * u)
+                .blur(radius: 7 * bl)
                 .animation(nil, value: paletteKey)
             // The chromatic ribbon — the pole-to-pole line: pinned at both
             // poles, ONE drastic sine skew, a full rotation every 5 seconds,
@@ -321,19 +342,22 @@ struct LaneCircle: View {
                     }
                     // The light itself: graded core, near FULL WHITE at the
                     // ribbon's strongest reach, dimming toward the poles.
-                    for i in 0..<(pts.count - 1) {
+                    // Overlapping 3-point segments: short-segment beading
+                    // shows at icon scale; overlap melts it into a filament.
+                    for i in 0..<(pts.count - 2) {
                         let t01 = Double(i) / Double(m)
                         let e = pow(sin(t01 * Double.pi), 1.6)
-                        let a = (0.22 + 0.72 * e) * alpha
+                        let a = (0.13 + 0.45 * e) * alpha
                         var seg = Path()
                         seg.move(to: pts[i])
                         seg.addLine(to: pts[i + 1])
+                        seg.addLine(to: pts[i + 2])
                         ctx.stroke(seg, with: .color(pal.core.opacity(a)),
                                    lineWidth: (1.3 + 1.3 * e) * u)
                     }
                 }
 
-                ctx.addFilter(.blur(radius: max(1.3 * u, 0.7)))
+                ctx.addFilter(.blur(radius: max(1.3 * bl, 0.7)))
                 ribbon(longitude: longitude, wobSeed: seed, alpha: 1)
                 ribbon(longitude: longitude + 2.3, wobSeed: seed * 3 + 1.7, alpha: 0.55)
             }
@@ -344,7 +368,7 @@ struct LaneCircle: View {
         // the sharp edge; the limb rides the yielding wall, so pushes glow too.
         .overlay {
             wall.strokeBorder(pal.light.opacity(0.75), lineWidth: 1.6 * u)
-                .blur(radius: 2.2 * u)
+                .blur(radius: 2.2 * bl)
         }
         .padding(6 * u)
         .shadow(color: pal.light.opacity(0.85), radius: 2.5 * u)
@@ -441,7 +465,10 @@ struct LaneCircle: View {
         return Double(h % 360) / 360
     }
 
-    private var helpText: String {
+}
+
+private extension LaneCircle {
+    var helpText: String {
         var bits: [String] = [info.name]
         if info.name != info.id, !info.id.isEmpty { bits.append("(\(info.id))") }
         if info.isGhost {

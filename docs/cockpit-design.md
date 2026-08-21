@@ -138,6 +138,19 @@ still observes) · the main toggle writes `owner` for routing, but the re-speak
 behavior still needs the chosen session running the coordinator ritual ("claim
 the voice") — v0 keeps the ritual unchanged.
 
+**Resolved from the first live drive (2026-08-21, Ranny at the window):**
+**ghost the dead.** The owner role hopped across sessions for 36h, so the 24h
+history carried lane tags from closed sessions and the v0 history-union rule
+gave each a full circle (8 showed; 5 were dead). Rule now: once the status
+feed has spoken, lanes it doesn't know — or knows closed — render as ghosts:
+dashed, dim, sorted last, no main toggle, tappable for their history, gone
+with the 24h sweep. Feed absent (old server) → nothing ghosts. Chosen over
+hiding so open-vs-gone reads at a glance and unheard backlogs (Journaling had
+13) stay reachable. Follow-ups filed by the same drive: a `claude -p` session
+exits before its async Stop hook runs and strands a "working" ring (candidate:
+server-side working→ready decay) · lane display names are raw cwd basenames
+(mapping belongs to the profile-pictures pass).
+
 **Design notes (recommendations, revisit from use):** render every worker turn
 v0 — background audio has no latency requirement; defer-render-until-opened is
 the many-lane optimization and lands naturally after P1's warm engine · worker

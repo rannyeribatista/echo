@@ -1,19 +1,23 @@
 import SwiftUI
 
-/// The stories rail — the window's first element, top to bottom (cockpit sit
-/// 2026-08-21): one fluid ORB per open lane, the AI-assistant identity.
-/// Orb v2 (Ranny's direction): a HOLLOW sphere of something fluid — a nearly
-/// clear heart with color gathering at the rim, a morphing liquid line and
-/// drifting particles inside, two translucent swirls over it. No initials,
-/// no rings: STATUS is the color (teal working · orange attention · violet
-/// finished-with-unheard · slate ready · gray ghost), and color changes
-/// tween fluidly instead of snapping. Working lanes swirl; the speaking lane
-/// breathes with the live audio level; stopped lanes hold a still
-/// constellation. The unheard dot sits beside the name now, half its old
-/// size, leaving the sphere clean.
+/// The stories rail, final form of the cockpit iteration (2026-08-21):
+/// the SELECTED lane's orb sits centered and featured at 115% size; every
+/// other lane rides a horizontal scroll beneath it at 50% — the assistant
+/// front and center, the fleet at a glance. Orbs are parametric (`unit`), so
+/// the small ones render crisp instead of scaled-blurry, and selection moves
+/// between tiers with a matched-geometry spring.
+///
+/// The orb itself: a hollow sphere — clear heart, color at the rim, an
+/// earth-limb glow melting the border — threaded by a chromatic pole-pinned
+/// ribbon (ONE sine skew, near-white at its brightest reach, spectral
+/// dispersion around it) rotating a full longitude every 5s while the axis
+/// slowly spins. The wall yields: gaussian bulges where the ribbon presses
+/// the border (total push capped so no canvas can guillotine it). STATUS is
+/// the color; changes tween 0.9s; the speaking orb breathes with the live
+/// audio level; motion coasts ~1.2s after speech/work ends.
 struct LaneInfo: Identifiable {
     let id: String          // lane key ("" = untagged legacy clips)
-    let name: String        // display name (custom or prettified basename)
+    let name: String        // display name (custom or titleized basename)
     let state: String?      // ready|working|attention|finished|closed; nil = no status feed
     let unplayed: Int
     let lastActivity: Date
@@ -27,8 +31,9 @@ struct LaneInfo: Identifiable {
     var displayName: String { name }
 }
 
-/// The sphere's wall (experimental, may roll back — Ranny): a circle whose
-/// radius yields with small gaussian bulges where the ribbon presses it.
+/// The sphere's wall: a circle whose radius yields with small gaussian bulges
+/// where the ribbon presses it. The TOTAL push is capped (scaled with the
+/// sphere) so overlapping bulges can never outgrow the paint canvas.
 struct BulgeCircle: InsettableShape {
     var radius: Double
     var angles: [Double]
@@ -38,17 +43,19 @@ struct BulgeCircle: InsettableShape {
     func path(in rect: CGRect) -> Path {
         let c = CGPoint(x: rect.midX, y: rect.midY)
         let baseR = radius - Double(insetAmount)
+        let maxPush = 5.0 * (radius / 27.0)
         var path = Path()
         let n = 72
         for i in 0...n {
             let th = Double(i) / Double(n) * 6.28318 - 3.14159
-            var r = baseR
+            var push = 0.0
             for j in 0..<min(angles.count, amounts.count) {
                 var d = th - angles[j]
                 while d > 3.14159 { d -= 6.28318 }
                 while d < -3.14159 { d += 6.28318 }
-                r += amounts[j] * exp(-(d * d) / 0.16)
+                push += amounts[j] * exp(-(d * d) / 0.16)
             }
+            let r = baseR + min(push, maxPush)
             let pt = CGPoint(x: c.x + CGFloat(cos(th) * r),
                              y: c.y + CGFloat(sin(th) * r))
             if i == 0 { path.move(to: pt) } else { path.addLine(to: pt) }
@@ -68,58 +75,79 @@ struct LaneRailView: View {
     @ObservedObject var client: EchoClient
     @State private var renamingLane: String?
     @State private var renameText = ""
+    @Namespace private var railNS
 
     var body: some View {
         let lanes = client.lanes
         let speakingLane = (client.isPlaying && !client.isPaused)
             ? client.nowPlayingClip?.lane : nil
         if !lanes.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .top, spacing: 12) {
-                    ForEach(lanes) { info in
-                        LaneCircle(info: info,
-                                   isSpeaking: info.id == speakingLane,
-                                   level: client.audioLevel) {
-                            client.selectLane(info.id)
-                        } setMain: { on in
-                            client.setMainLane(on ? info.id : nil)
-                        } rename: {
-                            renameText = info.name
-                            renamingLane = info.id
-                        }
-                        .popover(isPresented: Binding(
-                            get: { renamingLane == info.id },
-                            set: { if !$0 { renamingLane = nil } }
-                        )) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Lane name").font(.caption).foregroundStyle(.secondary)
-                                TextField(info.id.isEmpty ? "untagged" : info.id,
-                                          text: $renameText)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: 200)
-                                    .onSubmit {
-                                        client.renameLane(info.id, to: renameText)
-                                        renamingLane = nil
-                                    }
-                                Text("Empty restores the default.")
-                                    .font(.caption2).foregroundStyle(.tertiary)
+            VStack(spacing: 6) {
+                if let featured = lanes.first(where: { $0.isOpen }) {
+                    circle(featured, speakingLane: speakingLane, unit: 1.15)
+                        .matchedGeometryEffect(id: featured.id, in: railNS)
+                        .frame(maxWidth: .infinity)
+                }
+                let rest = lanes.filter { !$0.isOpen }
+                if !rest.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(alignment: .top, spacing: 8) {
+                            ForEach(rest) { info in
+                                circle(info, speakingLane: speakingLane, unit: 0.5)
+                                    .matchedGeometryEffect(id: info.id, in: railNS)
                             }
-                            .padding(12)
                         }
+                        .padding(.horizontal, 4)
+                        .padding(.top, 4)
+                        .padding(.bottom, 2)
                     }
                 }
-                .padding(.horizontal, 4)
-                .padding(.top, 9)
-                .padding(.bottom, 4)
             }
+            .animation(.spring(response: 0.42, dampingFraction: 0.85),
+                       value: client.openLane)
+        }
+    }
+
+    @ViewBuilder private func circle(_ info: LaneInfo, speakingLane: String?,
+                                     unit: Double) -> some View {
+        LaneCircle(info: info,
+                   unit: unit,
+                   isSpeaking: info.id == speakingLane,
+                   level: client.audioLevel) {
+            client.selectLane(info.id)
+        } setMain: { on in
+            client.setMainLane(on ? info.id : nil)
+        } rename: {
+            renameText = info.name
+            renamingLane = info.id
+        }
+        .popover(isPresented: Binding(
+            get: { renamingLane == info.id },
+            set: { if !$0 { renamingLane = nil } }
+        )) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Lane name").font(.caption).foregroundStyle(.secondary)
+                TextField(info.id.isEmpty ? "untagged" : info.id, text: $renameText)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 200)
+                    .onSubmit {
+                        client.renameLane(info.id, to: renameText)
+                        renamingLane = nil
+                    }
+                Text("Empty restores the default.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+            .padding(12)
         }
     }
 }
 
-/// One lane's orb + its name. The sphere is pure status-and-motion; identity
-/// lives in a lane-keyed tint woven through the swirl and in the name below.
+/// One lane's orb + its name, parametric in `unit` (1.15 featured · 0.5
+/// compact): every geometric constant scales, so small orbs are drawn small,
+/// never downscaled bitmaps.
 struct LaneCircle: View {
     let info: LaneInfo
+    let unit: Double
     let isSpeaking: Bool
     let level: Double
     let open: () -> Void
@@ -132,22 +160,29 @@ struct LaneCircle: View {
         !info.isGhost && (isSpeaking || info.state == "working")
     }
 
+    /// Sphere radius at this size.
+    private var sphereR: Double { 27 * unit }
+    /// Paint canvas: sphere + max push + limb blur, with margin — nothing
+    /// inside can be guillotined.
+    private var canvasSide: Double { (27 + 5 + 6) * 2 * unit }
+
     var body: some View {
         Button(action: open) {
-            VStack(spacing: 7) {
+            VStack(spacing: 7 * unit) {
                 orb
-                    .frame(width: 78, height: 78)
+                    .frame(width: canvasSide + 12 * unit,
+                           height: canvasSide + 12 * unit)
                     .overlay(alignment: .bottomTrailing) {
                         if info.isMain {
                             Image(systemName: "star.circle.fill")
-                                .font(.system(size: 15))
+                                .font(.system(size: max(15 * unit, 10)))
                                 .symbolRenderingMode(.multicolor)
                                 .background(Circle().fill(.background))
-                                .offset(x: -11, y: -11)
+                                .offset(x: -13 * unit, y: -13 * unit)
                         }
                     }
                 Text(info.displayName)
-                    .font(.caption2)
+                    .font(.system(size: unit >= 1 ? 11 : 9))
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -155,16 +190,16 @@ struct LaneCircle: View {
                                                  : AnyShapeStyle(.secondary))
                     .opacity(info.isGhost ? 0.6 : 1)
                     // The unheard dot rides absolute at the name's top-right,
-                    // grazing above the last character — transient, never in
-                    // the reading path, never on the sphere.
+                    // grazing above the last character.
                     .overlay(alignment: .topTrailing) {
                         if info.unplayed > 0 {
                             Circle().fill(Color.accentColor)
-                                .frame(width: 5, height: 5)
+                                .frame(width: unit >= 1 ? 5 : 4,
+                                       height: unit >= 1 ? 5 : 4)
                                 .offset(x: 7, y: -2)
                         }
                     }
-                    .frame(width: 76)
+                    .frame(width: unit >= 1 ? 96 : 52)
             }
         }
         .buttonStyle(.plain)
@@ -182,9 +217,6 @@ struct LaneCircle: View {
         .help(helpText)
     }
 
-    /// The hollow fluid sphere. TimelineView pauses entirely for still lanes,
-    /// so idle orbs cost nothing; at phase 0 the line and particles hold a
-    /// still constellation.
     private var orb: some View {
         TimelineView(.animation(minimumInterval: 1 / 24,
                                 paused: !(animated || coasting))) { tl in
@@ -192,7 +224,7 @@ struct LaneCircle: View {
                     ? tl.date.timeIntervalSinceReferenceDate : 0)
         }
         // Motion coasts for a beat after speech/work ends instead of freezing
-        // mid-swirl (the play/pause/stop abruptness Ranny flagged).
+        // mid-swirl.
         .onChange(of: animated) { on in
             if !on {
                 coasting = true
@@ -213,6 +245,7 @@ struct LaneCircle: View {
         let sinA = sin(spinAxis)
         let wall = wallShape(phase: phase, longitude: longitude,
                              cosA: cosA, sinA: sinA, seed: seed)
+        let u = unit
         ZStack {
             // Hollow shell: nearly clear heart, color gathering at the rim.
             Circle().fill(RadialGradient(
@@ -220,35 +253,34 @@ struct LaneCircle: View {
                         .init(color: pal.light.opacity(0.30), location: 0.62),
                         .init(color: pal.dark.opacity(0.85), location: 1)],
                 center: UnitPoint(x: 0.42, y: 0.36),
-                startRadius: 1, endRadius: 30))
-            // Two translucent liquid swirls.
+                startRadius: 1, endRadius: 30 * u))
+            // Two translucent liquid swirls — they opt OUT of the palette
+            // tween (their ever-advancing rotation would ease into a fast
+            // spin during status changes).
             Circle()
                 .fill(AngularGradient(
                     colors: [.clear, pal.swirl.opacity(0.40), .clear,
                              .white.opacity(0.14), .clear],
                     center: .center))
                 .rotationEffect(.radians(phase * 0.8))
-                .blur(radius: 5)
+                .blur(radius: 5 * u)
                 .animation(nil, value: paletteKey)
             Circle()
                 .fill(AngularGradient(
                     colors: [.clear, identityTint.opacity(0.30), .clear],
                     center: .center))
                 .rotationEffect(.radians(-phase * 1.35 + 2))
-                .blur(radius: 7)
+                .blur(radius: 7 * u)
                 .animation(nil, value: paletteKey)
-            // The fluid interior (orb v4, after the Dribbble reference):
-            // a chromatic RIBBON — Ranny's pole-to-pole line — pinned at both
-            // poles, skewing drastically along its run, rotating a full
-            // longitude every 5 seconds while the axis itself slowly spins.
-            // Drawn as parallel spectral strokes of the same path (the prism
-            // dispersion: cyan/magenta/green/amber side by side, oil-film
-            // style), with a fainter phase-shifted sibling for the folds.
+            // The chromatic ribbon — the pole-to-pole line: pinned at both
+            // poles, ONE drastic sine skew, a full rotation every 5 seconds,
+            // spectral dispersion around a near-white core.
             Canvas { ctx, size in
                 let c = CGPoint(x: size.width / 2, y: size.height / 2)
-                let R = 27.0                       // sphere radius — NOT the canvas rect
+                let R = 27.0 * u                   // sphere radius — NOT the canvas rect
                 let cx = Double(c.x)
                 let cy = Double(c.y)
+
                 func ribbon(longitude: Double, wobSeed: Double, alpha: Double) {
                     let m = 40
                     var pts: [CGPoint] = []
@@ -260,7 +292,7 @@ struct LaneCircle: View {
                         let sth = sin(th)
                         let y0: Double = -cos(th) * R * 0.92
                         let base: Double = sth * sinL * R * 0.82
-                        // ONE sine deformation (Ranny) — drastic but pure.
+                        // ONE sine deformation — drastic but pure.
                         let w1: Double = 0.50 * sin(2.2 * t01 * Double.pi + phase * 0.9 + wobSeed)
                         let skew: Double = sth * R * w1
                         let x0: Double = base + skew
@@ -268,10 +300,9 @@ struct LaneCircle: View {
                         let yr: Double = x0 * sinA + y0 * cosA
                         pts.append(CGPoint(x: cx + xr, y: cy + yr))
                     }
-                    // Spectral dispersion: the same path stroked in parallel
-                    // slivers of the spectrum — the prism disturbance.
-                    let spectrum: [(Double, Double)] = [(-2.4, 0.50), (-1.2, 0.83),
-                                                        (0, 0.33), (1.2, 0.12), (2.4, 0.66)]
+                    // Spectral dispersion: parallel slivers of the spectrum.
+                    let spectrum: [(Double, Double)] = [(-2.4 * u, 0.50), (-1.2 * u, 0.83),
+                                                        (0, 0.33), (1.2 * u, 0.12), (2.4 * u, 0.66)]
                     for (off, hue) in spectrum {
                         var path = Path()
                         for (i, pt) in pts.enumerated() {
@@ -281,9 +312,9 @@ struct LaneCircle: View {
                         ctx.stroke(path,
                                    with: .color(Color(hue: hue, saturation: 0.85,
                                                       brightness: 1).opacity(0.45 * alpha)),
-                                   lineWidth: 2.2)
+                                   lineWidth: 2.2 * u)
                     }
-                    // The light itself: a graded core, near FULL WHITE at the
+                    // The light itself: graded core, near FULL WHITE at the
                     // ribbon's strongest reach, dimming toward the poles.
                     for i in 0..<(pts.count - 1) {
                         let t01 = Double(i) / Double(m)
@@ -293,44 +324,38 @@ struct LaneCircle: View {
                         seg.move(to: pts[i])
                         seg.addLine(to: pts[i + 1])
                         ctx.stroke(seg, with: .color(Color.white.opacity(a)),
-                                   lineWidth: 1.3 + 1.3 * e)
+                                   lineWidth: (1.3 + 1.3 * e) * u)
                     }
                 }
 
-                ctx.addFilter(.blur(radius: 1.3))
+                ctx.addFilter(.blur(radius: max(1.3 * u, 0.7)))
                 ribbon(longitude: longitude, wobSeed: seed, alpha: 1)
                 ribbon(longitude: longitude + 2.3, wobSeed: seed * 3 + 1.7, alpha: 0.55)
             }
         }
-        // A 66pt canvas around a 27r sphere: every layer paints well past the
-        // wall's maximum bulge (30), so nothing can guillotine a push — the
-        // 1.09 scale trick could not save the Canvas, which rasterizes only
-        // its own rect (the true source of Ranny's straight cuts).
-        .frame(width: 66, height: 66)
+        .frame(width: canvasSide, height: canvasSide)
         .clipShape(wall)
         // The atmosphere (earth-limb treatment): a blurred bright rim melts
-        // the sharp clip edge, and the twin glows burn brighter — stronger,
-        // not larger. The limb rides the yielding wall, so pushes glow too.
+        // the sharp edge; the limb rides the yielding wall, so pushes glow too.
         .overlay {
-            wall.strokeBorder(pal.light.opacity(0.75), lineWidth: 1.6)
-                .blur(radius: 2.2)
+            wall.strokeBorder(pal.light.opacity(0.75), lineWidth: 1.6 * u)
+                .blur(radius: 2.2 * u)
         }
-        .padding(6)
-        .shadow(color: pal.light.opacity(0.85), radius: 2.5)
-        .shadow(color: pal.swirl.opacity(0.45), radius: 6)
+        .padding(6 * u)
+        .shadow(color: pal.light.opacity(0.85), radius: 2.5 * u)
+        .shadow(color: pal.swirl.opacity(0.45), radius: 6 * u)
         .scaleEffect(1 + (isSpeaking ? min(level, 1) * 0.22 : 0))
         .animation(.easeOut(duration: 0.12), value: level)
-        // Status changes flow, never snap (Ranny): tween the whole palette.
+        // Status changes flow, never snap: tween the whole palette.
         .animation(.easeInOut(duration: 0.9), value: paletteKey)
         .opacity(info.isGhost ? 0.5 : 1)
     }
 
-    /// Where the ribbon presses the wall (experimental border push): sample
-    /// the same meridian math; any point crossing the contact radius bends
-    /// the sphere outward at its angle.
+    /// Where the ribbon presses the wall: sample the same meridian math; any
+    /// point crossing the contact radius bends the sphere outward.
     private func wallShape(phase: Double, longitude: Double,
                            cosA: Double, sinA: Double, seed: Double) -> BulgeCircle {
-        let R0 = 27.0
+        let R0 = sphereR
         var angles: [Double] = []
         var amounts: [Double] = []
         let sinL0 = sin(longitude)
@@ -348,7 +373,7 @@ struct LaneCircle: View {
             let thr = R0 * 0.88
             if dist > thr {
                 angles.append(atan2(yr, xr))
-                amounts.append(min((dist - thr) * 0.8, 3.0))
+                amounts.append(min((dist - thr) * 0.8, 3.0 * unit))
             }
         }
         return BulgeCircle(radius: R0, angles: angles, amounts: amounts)
@@ -358,7 +383,7 @@ struct LaneCircle: View {
         "\(info.state ?? "-")|\(info.unplayed > 0)|\(info.isGhost)"
     }
 
-    /// Status IS the color (the ring died with orb v1 already).
+    /// Status IS the color.
     private var palette: (light: Color, dark: Color, swirl: Color) {
         if info.isGhost {
             return (Color(white: 0.55), Color(white: 0.32), Color(white: 0.65))
@@ -416,9 +441,9 @@ struct LaneCircle: View {
     }
 }
 
-/// Lane utils (cockpit iteration close): the open lane's curated links — a
-/// dev server, the design canvas, anything external — as tappable chips.
-/// Registered from any terminal via echo-link.sh; same chips on the phone.
+/// Lane utils: the open lane's curated links — a dev server, the design
+/// canvas, anything external — as tappable chips. Registered from any
+/// terminal via echo-link.sh; same chips on the phone.
 struct LaneLinksRow: View {
     let links: [EchoClient.LaneLink]
 

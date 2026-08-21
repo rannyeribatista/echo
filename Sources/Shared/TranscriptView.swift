@@ -277,7 +277,17 @@ struct TranscriptView: View {
     /// Paragraph top-edges per message (measured), for sounding-paragraph landings.
     @State private var chunkFrames: [UUID: [Int: CGFloat]] = [:]
 
-    private var ordered: [Clip] { clips.reversed() }
+    /// THE STALE-CAPTURE FIX (drive log, 14:24): the engine's onSwitch closure
+    /// captures this view struct by value at onAppear — a plain `clips` array
+    /// would freeze there, blinding scroll-switches to every later arrival
+    /// (pull-downs stopped one short of the real newest; the button, running
+    /// in the fresh view, worked fine). `client` is a reference, so deriving
+    /// the list from it reads live data even inside the stale closure.
+    private var ordered: [Clip] {
+        let lane = client.openLane
+        return client.clips.filter { lane == nil || $0.lane == lane }.reversed()
+    }
+    private var newestId: UUID? { ordered.last?.id }
     private var current: Clip? {
         if let pageId, let c = ordered.first(where: { $0.id == pageId }) { return c }
         return ordered.last
@@ -341,7 +351,7 @@ struct TranscriptView: View {
             prepareLanding(for: ordered[ni], dir: lastDir)
             withAnimation(springForSwitch) { pageId = newId }
         }
-        .onChange(of: clips.first?.id) { _ in
+        .onChange(of: newestId) { _ in
             if pageId == nil { lastDir = 1 }   // riding the newest: slide up
         }
         .onChange(of: client.openLane) { _ in

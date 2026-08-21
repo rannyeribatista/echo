@@ -41,7 +41,7 @@ struct EchoMacApp: App {
         .commands {
             CommandGroup(after: .appInfo) {
                 Divider()
-                Text(client.statusText)
+                Text(client.menuStatus)
             }
         }
 

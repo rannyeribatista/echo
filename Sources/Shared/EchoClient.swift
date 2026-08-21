@@ -382,6 +382,17 @@ final class EchoClient: ObservableObject {
         #endif
     }
 
+    /// The app-menu status line (macOS): a dot + one word. No counters — the
+    /// rail's dots already carry unheard state (Ranny, cockpit rounding).
+    var menuStatus: String {
+        guard isListening else { return "⚪️ Idle" }
+        switch state {
+        case .degraded: return "🟡 Reconnecting…"
+        case .error(let why): return "🔴 \(why)"
+        default: return isPlaying ? "🟢 Playing…" : "🟢 Listening"
+        }
+    }
+
     /// The one line the main screen shows.
     var statusText: String {
         if isPlaying {

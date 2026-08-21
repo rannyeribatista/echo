@@ -214,7 +214,16 @@ seam.
 - Parked (their own sits): voice IN · Project Parking Lot browser surface ·
   One Echo's parked list.
 
-## Ops residue (accumulating; executed at merge/deploy)
+## Ops residue — EXECUTED at the 2.1.0 deploy (2026-08-21 evening)
+
+> Shipped: both repos merged to main and pushed · canonical EchoMac 2.1.0
+> dev-signed at the login path · iPhone 2.1.0 installed over USB (fresh 7-day
+> clock) · hooks rewired to live core paths · ECHO_ALL_LANES=on live · server
+> restarted from main · integrity baseline + core backup. The amber-orb icon
+> (a frozen frame of the sphere itself) rides both apps. Remaining from the
+> list below: only the orchestrator-spec §5 sync (Nic's file, next touch).
+
+## Ops residue (as accumulated during the sit)
 
 - `nic-orchestrator-spec.md`: the single-voice/owner assumption becomes the
   optional main-orchestrator mode (sanctioned 08-21, A10) — sync at re-sync.

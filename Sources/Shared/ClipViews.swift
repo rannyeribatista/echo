@@ -120,6 +120,8 @@ struct ActiveMessageCard: View {
         if let chunks = clip.chunks {
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(chunks, id: \.seq) { chunk in
+                    // Each paragraph is a tap target: tap to highlight and
+                    // play from that part (jump supersedes what's sounding).
                     Text(chunk.text)
                         .font(.footnote)
                         .foregroundStyle(!isLive || chunk.seq == client.currentChunk
@@ -128,6 +130,8 @@ struct ActiveMessageCard: View {
                         .opacity(isLive && chunk.seq < client.currentChunk ? 0.45 : 1)
                         .strikethrough(chunk.failed)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                        .onTapGesture { client.jump(to: chunk.seq, in: clip) }
                 }
             }
         } else {

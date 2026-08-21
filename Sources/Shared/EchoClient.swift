@@ -732,6 +732,16 @@ final class EchoClient: ObservableObject {
     }
 
     private func startWalkie(_ clip: Clip) {
+        jump(to: 0, in: clip)
+    }
+
+    /// Tap-to-play a part: start (or re-enter) this message at chunk `seq` —
+    /// tapping a paragraph in the card highlights it and plays from there,
+    /// whether the message is idle, finished, or mid-playback. User intent,
+    /// so it supersedes whatever is currently sounding; from the tapped part
+    /// on, normal walkie flow resumes (gates, then Over at the end).
+    func jump(to seq: Int, in clip: Clip) {
+        guard let chunks = clip.chunks, seq >= 0, seq < chunks.count else { return }
         playToken += 1
         isPlaying = true
         isPaused = false
@@ -739,11 +749,11 @@ final class EchoClient: ObservableObject {
         awaitingRender = false
         nowPlayingClip = clips.first(where: { $0.id == clip.id }) ?? clip
         openClip = nowPlayingClip
-        currentChunk = 0
+        currentChunk = seq
         playbackTime = 0
         playbackDuration = 0
         Task { await self.fetchOverIfMissing() }   // needed by message end
-        playChunk(0)
+        playChunk(seq)
     }
 
     /// Play chunk `index` of the now-playing message, skipping failed ones.

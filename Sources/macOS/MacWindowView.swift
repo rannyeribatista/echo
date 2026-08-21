@@ -1,11 +1,10 @@
 import SwiftUI
 
-/// The main window since the cockpit rounding (2026-08-21): three elements,
-/// top to bottom — the stories rail, one combined transport/mode row, and the
-/// message pager filling everything below. The old status row is gone: status
-/// and Settings live in the app menu (EchoMacApp.commands / Settings scene),
-/// quitting the app is the off switch, and mute replaced "Stop listening".
-/// The height saved is reserved for user input, coming later.
+/// The main window since the cockpit rounding (2026-08-21), completed by the
+/// input build the same night: the stories rail, the transport/mode row, the
+/// message pager — and the PromptBar at the bottom, the height the rounding
+/// cleared for it. Status and Settings live in the app menu; quitting the
+/// app is the off switch.
 struct MacWindowView: View {
     @ObservedObject var client: EchoClient
     @Environment(\.colorScheme) private var scheme
@@ -34,6 +33,8 @@ struct MacWindowView: View {
             } else {
                 TranscriptView(client: client, clips: visibleClips)
             }
+
+            PromptBar(client: client)
         }
         .padding(12)
         .frame(minWidth: 340, minHeight: 420)

@@ -136,6 +136,8 @@ struct LaneRailView: View {
         } rename: {
             renameText = info.name
             renamingLane = info.id
+        } cycleMode: {
+            client.cycleMode(info.id)
         }
         .popover(isPresented: Binding(
             get: { renamingLane == info.id },
@@ -169,6 +171,7 @@ struct LaneCircle: View {
     let open: () -> Void
     let setMain: (Bool) -> Void
     let rename: () -> Void
+    let cycleMode: () -> Void
 
     @State private var coasting = false
 
@@ -228,6 +231,10 @@ struct LaneCircle: View {
                 } else {
                     Button("Set as main orchestrator") { setMain(true) }
                 }
+                Divider()
+                // shift+tab into the live pane (input phase). Blind by
+                // design: the terminal shows the resulting mode.
+                Button("Cycle permission mode") { cycleMode() }
             }
         }
         .help(helpText)

@@ -44,10 +44,18 @@ struct Clip: Identifiable, Codable, Equatable {
     let sentAt: Date?       // when the Mac rendered it (from the tag sidecar)
     let receivedAt: Date
     var playedAt: Date?     // nil = unplayed (the pulsing dot)
+    /// Input phase (2026-08-21): "user" = one of HIS prompts, mirrored by the
+    /// status shim — rendered as a bubble, never played. nil/anything else =
+    /// Nic speaking.
+    let role: String?
+    /// The turn id (harness prompt_id, or the shim's synthetic fallback) —
+    /// what groups a user bubble + opening + final onto one pager page.
+    let promptId: String?
 
     init(id: UUID, msgId: String? = nil, text: String, lane: String, label: String,
          fileName: String, chunks: [ClipChunk]? = nil, isComplete: Bool = true,
-         sentAt: Date?, receivedAt: Date, playedAt: Date?) {
+         sentAt: Date?, receivedAt: Date, playedAt: Date?,
+         role: String? = nil, promptId: String? = nil) {
         self.id = id
         self.msgId = msgId
         self.text = text
@@ -59,7 +67,11 @@ struct Clip: Identifiable, Codable, Equatable {
         self.sentAt = sentAt
         self.receivedAt = receivedAt
         self.playedAt = playedAt
+        self.role = role
+        self.promptId = promptId
     }
+
+    var isUser: Bool { role == "user" }
 
     /// Decode tolerates pre-walkie clips.json: the new fields default to a
     /// complete, single-file clip.
@@ -76,6 +88,8 @@ struct Clip: Identifiable, Codable, Equatable {
         sentAt = try c.decodeIfPresent(Date.self, forKey: .sentAt)
         receivedAt = try c.decode(Date.self, forKey: .receivedAt)
         playedAt = try c.decodeIfPresent(Date.self, forKey: .playedAt)
+        role = try c.decodeIfPresent(String.self, forKey: .role)
+        promptId = try c.decodeIfPresent(String.self, forKey: .promptId)
     }
 
     /// Rendered-on-the-Mac time when tagged, else arrival time — matters for
@@ -231,10 +245,12 @@ final class EchoClient: ObservableObject {
         #endif
         cfg.timeoutIntervalForRequest = 70
         cfg.timeoutIntervalForResource = 120
-        // 2, not 1: the message loop and the status loop each hold a long-poll
+        // 3, not 1: the message loop and the status loop each hold a long-poll
         // open — one shared connection would serialize them (a status change
-        // would wait out /v2/next's 55s hold before it could even ask).
-        cfg.httpMaximumConnectionsPerHost = 2
+        // would wait out /v2/next's 55s hold before it could even ask). The
+        // third slot is the input phase's: a /prompt or /confirm POST must
+        // never queue behind the long-polls.
+        cfg.httpMaximumConnectionsPerHost = 3
         return URLSession(configuration: cfg)
     }
 
@@ -265,14 +281,12 @@ final class EchoClient: ObservableObject {
     }
     /// Walkie gating on (default): pause at each chunk boundary and wait for
     /// Continue; "Over" marks the end. Off restores continuous auto-play.
+    /// (Mute retired with the input build, 08-21 night: it was auto-play-off
+    /// wearing a second hat — the speaker icon now belongs to auto-play.)
     private var walkieMode: Bool {
         UserDefaults.standard.object(forKey: "walkieMode") == nil
             ? true : UserDefaults.standard.bool(forKey: "walkieMode")
     }
-    /// Mute (cockpit rounding, 08-21): messages keep arriving and light their
-    /// dots, but nothing plays AUTOMATICALLY — a deliberate tap still obeys
-    /// the human. Replaces "Stop listening" as the everyday quiet switch.
-    private var isMuted: Bool { UserDefaults.standard.bool(forKey: "muted") }
     /// Newest walkie message id fully received — the /v2/next cursor. Ids are
     /// the Mac's ms timestamps, so integer order is arrival order.
     private var sinceCursor: Int {
@@ -517,12 +531,22 @@ final class EchoClient: ObservableObject {
         let url: String
     }
 
+    /// A permission request waiting on him (input phase): nic-confirm.sh holds
+    /// the harness while Echo offers Allow / Deny; a tap answers the hook.
+    struct ConfirmInfo: Decodable, Equatable {
+        let id: String
+        let tool: String
+        let summary: String
+        let ts: Double?
+    }
+
     /// One lane's entry in the /v2/status snapshot (cockpit rail).
     struct LaneStatusEntry: Decodable, Equatable {
         let state: String       // ready|working|attention|finished|closed
         let session: String?
         let ts: Double?
         let links: [LaneLink]?
+        let confirm: ConfirmInfo?
     }
 
     /// The /v2/status long-poll answer: a fold counter + the full snapshot.
@@ -548,6 +572,8 @@ final class EchoClient: ObservableObject {
         let text: String
         let chunks: [MChunk]
         let final: Bool
+        let role: String?       // "user" = a mirrored prompt (bubble, no audio)
+        let prompt: String?     // turn id — groups bubble + opening + final
     }
 
     private func loop() async {
@@ -713,16 +739,28 @@ final class EchoClient: ObservableObject {
         if !clips.contains(where: { $0.msgId == m.id }) {
             var label = m.label ?? ""
             if label.isEmpty { label = Clip.defaultLabel(for: m.text) }
+            let isUser = m.role == "user"
             let clip = Clip(id: UUID(), msgId: m.id, text: m.text, lane: m.lane ?? "",
                             label: label, fileName: "",
                             chunks: m.chunks.map { ClipChunk(seq: $0.seq, text: $0.text) },
                             isComplete: false,
                             sentAt: m.ts.map { Date(timeIntervalSince1970: $0) },
-                            receivedAt: Date(), playedAt: nil)
+                            // A user bubble is born heard — he WROTE it.
+                            receivedAt: Date(), playedAt: isUser ? Date() : nil,
+                            role: m.role,
+                            promptId: (m.prompt?.isEmpty == false) ? m.prompt : nil)
             clips.insert(clip, at: 0)
             progressed = true
-            log.add("walkie message \(m.id): \(m.chunks.count) chunks — \(m.text.prefix(48))")
-            autoPlayArrived(clip)
+            if isUser {
+                log.add("prompt bubble (\(clip.lane)): \(m.text.prefix(48))")
+                if openLane == nil { setOpenLane(clip.lane) }
+                // His own words in the open lane pull the pager to the new
+                // turn — the reply will land on the same page.
+                if clip.lane == openLane { openClip = clip }
+            } else {
+                log.add("walkie message \(m.id): \(m.chunks.count) chunks — \(m.text.prefix(48))")
+                autoPlayArrived(clip)
+            }
         }
         for mc in m.chunks {
             guard let i = clips.firstIndex(where: { $0.msgId == m.id }),
@@ -903,7 +941,7 @@ final class EchoClient: ObservableObject {
         if openLane == nil {
             setOpenLane(clip.lane)   // first message ever: its lane becomes the pane
         }
-        guard autoPlay, !isMuted else { return }
+        guard autoPlay else { return }
         guard soundingLanes.contains(clip.lane) else {
             log.add("lane \(clip.lane.isEmpty ? "untagged" : clip.lane) queued silently (pane not open)")
             return
@@ -1072,7 +1110,7 @@ final class EchoClient: ObservableObject {
     }
 
     private func playNextQueued() {
-        guard autoPlay, !isMuted else { pendingAutoPlay = []; return }
+        guard autoPlay else { pendingAutoPlay = []; return }
         while let nextId = pendingAutoPlay.first {
             pendingAutoPlay.removeFirst()
             // A queued item whose lane he switched away from stays as an
@@ -1135,6 +1173,93 @@ final class EchoClient: ObservableObject {
         (ducker as? MacDucker)?.testDuck(completion: completion)
     }
     #endif
+
+    // MARK: - Input (the cockpit speaks back — 2026-08-21 night)
+
+    /// One-line feedback under the input field. Deliberately failure-only:
+    /// success needs no announcement — the bubble arriving IS the receipt
+    /// (the server mirrors the injected prompt back through the status shim).
+    @Published var promptFeedback: String?
+
+    /// Type + submit into the open lane's session (server /prompt → herdr).
+    func sendPrompt(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        guard let lane = openLane else {
+            promptFeedback = "Open a lane first."
+            return
+        }
+        promptFeedback = nil
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let (code, data) = try await self.post(
+                    "/prompt", body: ["lane": lane, "text": trimmed])
+                if code == 204 {
+                    self.log.add("prompt sent → \(self.displayName(for: lane))")
+                } else {
+                    self.promptFeedback = Self.serverWhy(data)
+                        ?? "Send failed (\(code))."
+                    self.log.add("prompt REJECTED (\(code)) — \(self.promptFeedback ?? "")")
+                }
+            } catch {
+                self.promptFeedback = "Send failed — \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// Raw chords into a lane's pane — the mode cycle lives here. The server
+    /// allowlists what a "key" can be; free text always goes via sendPrompt.
+    func sendKeys(_ keys: [String], lane: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let (code, data) = try await self.post(
+                    "/keys", body: ["lane": lane, "keys": keys])
+                if code == 204 {
+                    self.log.add("keys \(keys.joined(separator: "+")) → \(lane)")
+                } else {
+                    self.promptFeedback = Self.serverWhy(data) ?? "Keys failed (\(code))."
+                }
+            } catch {
+                self.promptFeedback = "Keys failed — \(error.localizedDescription)"
+            }
+        }
+    }
+
+    /// shift+tab: cycle the lane's permission mode (default → accept edits →
+    /// plan → …). Blind by design — the terminal shows the resulting mode;
+    /// Echo only owns the chord.
+    func cycleMode(_ lane: String) { sendKeys(["shift+tab"], lane: lane) }
+
+    /// Answer a pending permission request (the orange strip's Allow / Deny).
+    /// The buttons vanish when the /v2/status snapshot folds the decision.
+    func decideConfirm(_ id: String, allow: Bool) {
+        Task { [weak self] in
+            guard let self else { return }
+            _ = try? await self.post(
+                "/confirm/decide", body: ["id": id, "decision": allow ? "allow" : "deny"])
+            self.log.add("permission \(allow ? "ALLOWED" : "DENIED") (\(id.prefix(12))…)")
+        }
+    }
+
+    private func post(_ path: String, body: [String: Any]) async throws -> (Int, Data) {
+        guard let url = URL(string: "http://\(host):\(port)\(path)") else {
+            throw URLError(.badURL)
+        }
+        var req = URLRequest(url: url, timeoutInterval: 15)
+        req.httpMethod = "POST"
+        req.setValue(token, forHTTPHeaderField: "X-Echo-Token")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        return (http.statusCode, data)
+    }
+
+    private static func serverWhy(_ data: Data) -> String? {
+        (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
+    }
 
     private func markPlayed(_ id: UUID) {
         guard let i = clips.firstIndex(where: { $0.id == id }),

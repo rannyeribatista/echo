@@ -34,6 +34,9 @@ struct ContentView: View {
             } else {
                 TranscriptView(client: client, clips: visibleClips)
             }
+
+            PromptBar(client: client)
+                .padding(.bottom, 6)
         }
         .padding(.horizontal)
         .padding(.top, 10)

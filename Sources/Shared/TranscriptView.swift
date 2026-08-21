@@ -25,12 +25,14 @@ import AppKit
 
 // MARK: - Measurements
 
-/// Text heights keyed by message id — during a page-switch animation BOTH
-/// pages are alive and reporting; a single scalar got clobbered by whichever
-/// landed last (the wrong-message/centering bug of the first pager build).
+/// Text heights keyed by PAGE id — during a page-switch animation BOTH pages
+/// are alive and reporting; a single scalar got clobbered by whichever landed
+/// last (the wrong-message/centering bug of the first pager build). Keys are
+/// Strings since the input build: a page is a TURN, whose id must stay stable
+/// while clips accrete onto it (prompt → opening → final).
 private struct TextHeightKey: PreferenceKey {
-    static var defaultValue: [UUID: CGFloat] = [:]
-    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
+    static var defaultValue: [String: CGFloat] = [:]
+    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) {
         value.merge(nextValue()) { max($0, $1) }
     }
 }
@@ -76,11 +78,11 @@ final class PagerEngine: ObservableObject {
     /// Elastic display offset while pulling past an edge (+ = pulled at top).
     @Published var rubber: CGFloat = 0
 
-    /// Measured text heights per message — kept across visits so returning to
+    /// Measured text heights per page — kept across visits so returning to
     /// a page lands correctly before its next layout pass.
-    @Published private(set) var heights: [UUID: CGFloat] = [:]
+    @Published private(set) var heights: [String: CGFloat] = [:]
     /// The page the physics currently applies to.
-    var currentId: UUID?
+    var currentId: String?
     var textH: CGFloat { currentId.flatMap { heights[$0] } ?? 0 }
     var boxH: CGFloat = 0
     /// Called with -1 (page above / older) or +1 (below / newer).
@@ -144,7 +146,7 @@ final class PagerEngine: ObservableObject {
     /// outside (auto-play advance, lane switch, arrival). Either way the
     /// physics now applies to `id`; if we already know its height (a page
     /// revisited), the landing applies immediately.
-    func pageDidChange(to id: UUID?) {
+    func pageDidChange(to id: String?) {
         currentId = id
         if justPrepared {
             justPrepared = false
@@ -161,7 +163,7 @@ final class PagerEngine: ObservableObject {
 
     /// A page's text measured (either of the two alive during a transition —
     /// only the current one moves the physics).
-    func textMeasured(id: UUID, _ h: CGFloat) {
+    func textMeasured(id: String, _ h: CGFloat) {
         heights[id] = h
         if id == currentId { applyLanding(h) }
     }
@@ -271,6 +273,16 @@ private struct PagerHitView: NSViewRepresentable {
 
 // MARK: - The pager
 
+/// One pager page since the input build (2026-08-21 night): a TURN — his
+/// prompt bubble plus the opening and final that answered it, grouped by
+/// (lane, prompt id). Clips without a turn id (pre-input history, `hear`
+/// replays) page alone, exactly as before. The id is the group key, so it
+/// stays stable while the turn's pieces accrete onto the same page.
+struct Turn: Identifiable, Equatable {
+    let id: String
+    let clips: [Clip]          // oldest first: bubble, opening, final
+}
+
 struct TranscriptView: View {
     @ObservedObject var client: EchoClient
     /// The open lane's history, newest-first as EchoClient keeps it.
@@ -279,11 +291,12 @@ struct TranscriptView: View {
     #if os(macOS)
     @StateObject private var engine = PagerEngine()
     #endif
-    /// nil = ride the newest message; set once the user navigates away.
-    @State private var pageId: UUID?
+    /// nil = ride the newest turn; set once the user navigates away.
+    @State private var pageId: String?
     /// Direction of the last switch, for the slide transition.
     @State private var lastDir: Int = 1
-    /// Paragraph top-edges per message (measured), for sounding-paragraph landings.
+    /// Paragraph top-edges per clip (measured in the turn's content space),
+    /// for sounding-paragraph landings.
     @State private var chunkFrames: [UUID: [Int: CGFloat]] = [:]
 
     /// THE STALE-CAPTURE FIX (drive log, 14:24): the engine's onSwitch closure
@@ -292,25 +305,44 @@ struct TranscriptView: View {
     /// (pull-downs stopped one short of the real newest; the button, running
     /// in the fresh view, worked fine). `client` is a reference, so deriving
     /// the list from it reads live data even inside the stale closure.
-    private var ordered: [Clip] {
+    private var ordered: [Turn] {
         let lane = client.openLane
-        return client.clips.filter { lane == nil || $0.lane == lane }.reversed()
+        let list: [Clip] = client.clips.filter { lane == nil || $0.lane == lane }.reversed()
+        var turns: [Turn] = []
+        var at: [String: Int] = [:]
+        for c in list {
+            if let pid = c.promptId, !pid.isEmpty {
+                let key = "\(c.lane)|\(pid)"
+                if let i = at[key] {
+                    turns[i] = Turn(id: key, clips: turns[i].clips + [c])
+                    continue
+                }
+                at[key] = turns.count
+                turns.append(Turn(id: key, clips: [c]))
+            } else {
+                turns.append(Turn(id: c.id.uuidString, clips: [c]))
+            }
+        }
+        return turns
     }
-    private var newestId: UUID? { ordered.last?.id }
-    private var current: Clip? {
-        if let pageId, let c = ordered.first(where: { $0.id == pageId }) { return c }
+    private var newestId: String? { ordered.last?.id }
+    private var current: Turn? {
+        if let pageId, let t = ordered.first(where: { $0.id == pageId }) { return t }
         return ordered.last
     }
     private var currentIndex: Int {
         guard let cur = current else { return 0 }
         return ordered.firstIndex(where: { $0.id == cur.id }) ?? ordered.count - 1
     }
+    private func turnIndex(containing clipId: UUID) -> Int? {
+        ordered.firstIndex(where: { $0.clips.contains(where: { $0.id == clipId }) })
+    }
 
     var body: some View {
         ZStack {
-            if let clip = current {
-                page(for: clip)
-                    .id(clip.id)
+            if let turn = current {
+                page(for: turn)
+                    .id(turn.id)
                     .transition(pageTransition)
             }
         }
@@ -347,12 +379,28 @@ struct TranscriptView: View {
             #endif
         }
         .onChange(of: client.openClip?.id) { newId in
-            // Follow selection made elsewhere (auto-play advance, taps).
-            guard let newId, newId != current?.id,
-                  let ni = ordered.firstIndex(where: { $0.id == newId }) else { return }
+            // Follow selection made elsewhere (auto-play advance, taps, an
+            // arriving prompt bubble) — to the TURN that holds the clip.
+            guard let newId, let ni = turnIndex(containing: newId),
+                  ordered[ni].id != current?.id else { return }
             lastDir = ni >= currentIndex ? 1 : -1
             prepareLanding(for: ordered[ni], dir: lastDir)
-            withAnimation(springForSwitch) { pageId = newId }
+            withAnimation(springForSwitch) { pageId = ordered[ni].id }
+        }
+        .onChange(of: client.nowPlayingClip?.id) { npId in
+            // A message starting INSIDE the current page (the turn's final
+            // auto-playing under its bubble) has no page switch to land it —
+            // glide the view to its sounding paragraph here instead.
+            #if os(macOS)
+            guard let npId, let cur = current,
+                  cur.clips.contains(where: { $0.id == npId }),
+                  let y = chunkFrames[npId]?[client.currentChunk] else { return }
+            let maxOff = max((engine.heights[cur.id] ?? 0) - engine.boxH, 0)
+            guard maxOff > 0 else { return }
+            withAnimation(PagerEngine.switchSpring) {
+                engine.innerOffset = min(max(y - 80, 0), maxOff)
+            }
+            #endif
         }
         .onChange(of: newestId) { _ in
             if pageId == nil { lastDir = 1 }   // riding the newest: slide up
@@ -401,7 +449,7 @@ struct TranscriptView: View {
     }
     #endif
 
-    /// -1 = the message above (older) · +1 = below (newer). Returns whether
+    /// -1 = the turn above (older) · +1 = below (newer). Returns whether
     /// there was a page to switch to.
     private func switchPage(_ dir: Int) -> Bool {
         let ni = currentIndex + dir
@@ -410,18 +458,19 @@ struct TranscriptView: View {
         lastDir = dir
         prepareLanding(for: next, dir: dir)
         withAnimation(springForSwitch) { pageId = next.id }
-        client.select(next)
+        if let l = next.clips.last { client.select(l) }
         return true
     }
 
-    /// Where a page switch lands. A LIVE message wins: land on its sounding
+    /// Where a page switch lands. A LIVE turn wins: land on the sounding
     /// paragraph so the highlight picks right back up (Ranny, 08-21).
-    /// Otherwise: entering from below lands at the bottom of the message
+    /// Otherwise: entering from below lands at the bottom of the turn
     /// above (the reading position); entering from above lands at its top.
-    private func prepareLanding(for clip: Clip, dir: Int) {
+    private func prepareLanding(for turn: Turn, dir: Int) {
         #if os(macOS)
-        if clip.id == client.nowPlayingClip?.id,
-           let y = chunkFrames[clip.id]?[client.currentChunk] {
+        if let np = client.nowPlayingClip,
+           turn.clips.contains(where: { $0.id == np.id }),
+           let y = chunkFrames[np.id]?[client.currentChunk] {
             engine.prepareForNewPage(landAtOffset: max(y - 80, 0))
         } else {
             engine.prepareForNewPage(landAtBottom: dir < 0)
@@ -429,7 +478,7 @@ struct TranscriptView: View {
         #endif
     }
 
-    /// The floating button: back to the newest message, landing at its bottom
+    /// The floating button: back to the newest turn, landing at its bottom
     /// (the latest words). pageId returns to nil so the pager rides new
     /// arrivals again.
     private func jumpToNewest() {
@@ -437,7 +486,8 @@ struct TranscriptView: View {
         lastDir = 1
         // A live newest lands on its sounding paragraph; otherwise at its
         // latest words.
-        if last.id == client.nowPlayingClip?.id {
+        if let np = client.nowPlayingClip,
+           last.clips.contains(where: { $0.id == np.id }) {
             prepareLanding(for: last, dir: 1)
         } else {
             #if os(macOS)
@@ -445,22 +495,22 @@ struct TranscriptView: View {
             #endif
         }
         withAnimation(springForSwitch) { pageId = nil }
-        client.select(last)
+        if let l = last.clips.last { client.select(l) }
     }
 
-    @ViewBuilder private func page(for clip: Clip) -> some View {
+    @ViewBuilder private func page(for turn: Turn) -> some View {
         VStack(spacing: 8) {
-            pageHeader(clip)
+            pageHeader(turn)
             #if os(macOS)
             GeometryReader { box in
-                MessageBlock(client: client, clip: clip)
+                turnContent(turn)
                     .frame(width: box.size.width)
                     .fixedSize(horizontal: false, vertical: true)
                     .background(GeometryReader { g in
                         Color.clear.preference(key: TextHeightKey.self,
-                                               value: [clip.id: g.size.height])
+                                               value: [turn.id: g.size.height])
                     })
-                    .offset(y: pageOffset(for: clip, boxHeight: box.size.height))
+                    .offset(y: pageOffset(for: turn, boxHeight: box.size.height))
                     .frame(width: box.size.width, height: box.size.height, alignment: .topLeading)
                     .clipped()
                     .contentShape(Rectangle())
@@ -469,10 +519,10 @@ struct TranscriptView: View {
             #else
             // iOS: native scrolling inside the page; overscroll past either
             // edge (the bounce) is the page switch — pull down hard at the
-            // top for the previous message, up at the bottom for the next.
+            // top for the previous turn, up at the bottom for the next.
             GeometryReader { outer in
                 ScrollView {
-                    MessageBlock(client: client, clip: clip)
+                    turnContent(turn)
                         .background(GeometryReader { g in
                             Color.clear.preference(
                                 key: PhoneScrollKey.self,
@@ -497,12 +547,30 @@ struct TranscriptView: View {
         }
     }
 
+    /// The page body: his bubble, then Nic's opening/final blocks — the whole
+    /// turn on one page. The vertical breathing room and the paragraph
+    /// coordinate space live HERE (they were MessageBlock's when a page was
+    /// one clip) so landings work across the turn's pieces.
+    private func turnContent(_ turn: Turn) -> some View {
+        VStack(alignment: .center, spacing: 22) {
+            ForEach(turn.clips) { clip in
+                if clip.isUser {
+                    PromptBubble(clip: clip)
+                } else {
+                    MessageBlock(client: client, clip: clip)
+                }
+            }
+        }
+        .padding(.vertical, 28)
+        .coordinateSpace(name: "msgContent")
+    }
+
     /// Each alive page (two, mid-transition) positions by its OWN measured
     /// height; only the current page carries the live physics offsets.
-    private func pageOffset(for clip: Clip, boxHeight: CGFloat) -> CGFloat {
+    private func pageOffset(for turn: Turn, boxHeight: CGFloat) -> CGFloat {
         #if os(macOS)
-        let isCurrent = clip.id == engine.currentId
-        let textH = engine.heights[clip.id] ?? 0
+        let isCurrent = turn.id == engine.currentId
+        let textH = engine.heights[turn.id] ?? 0
         let rubber = isCurrent ? engine.rubber : 0
         if textH > 0, textH <= boxHeight {
             return (boxHeight - textH) / 2 + rubber          // centered, calm
@@ -513,11 +581,13 @@ struct TranscriptView: View {
         #endif
     }
 
-    private func pageHeader(_ clip: Clip) -> some View {
-        HStack(spacing: 8) {
+    private func pageHeader(_ turn: Turn) -> some View {
+        let stamp = turn.clips.first?.displayedAt ?? Date()
+        let unheard = turn.clips.contains { $0.playedAt == nil && !$0.isUser }
+        return HStack(spacing: 8) {
             Rectangle().fill(.quaternary).frame(height: 1)
-            if clip.playedAt == nil { PulsingDot() }
-            Text(clip.displayedAt, style: .time)
+            if unheard { PulsingDot() }
+            Text(stamp, style: .time)
                 .font(.caption).foregroundStyle(.secondary)
             Text("\(currentIndex + 1)/\(ordered.count)")
                 .font(.caption2.monospacedDigit())
@@ -542,6 +612,24 @@ private struct AlwaysBounce: ViewModifier {
 
 // MARK: - One message's text
 
+/// Reading typography (Settings → Reading): family + size are the reader's
+/// choice. Default = Apple's serif reading face, New York — "the Apple SF I
+/// liked" (Ranny); plain SF stays one tap away. Shared by the message blocks
+/// and the prompt bubbles so the whole turn reads as one page.
+func readingFont(_ key: String, size: Double) -> Font {
+    switch key {
+    case "system": return .system(size: size)
+    case "mono": return .system(size: size, design: .monospaced)
+    case "menlo": return .custom("Menlo", size: size)
+    case "iowan": return .custom("Iowan Old Style", size: size)
+    case "charter": return .custom("Charter", size: size)
+    case "georgia": return .custom("Georgia", size: size)
+    case "palatino": return .custom("Palatino", size: size)
+    case "ubuntu": return .custom("Ubuntu", size: size)
+    default: return .system(size: size, design: .serif)   // newyork
+    }
+}
+
 /// The full text of one message at reading size, centered. Fade rules
 /// (Ranny's spec): the page is the selected message and reads strong; while
 /// audio plays only the sounding paragraph stays strong. Tap a paragraph to
@@ -550,26 +638,11 @@ private struct MessageBlock: View {
     @ObservedObject var client: EchoClient
     let clip: Clip
 
-    /// Reading typography (Settings → Reading): family + size are the
-    /// reader's choice. Default = Apple's serif reading face, New York —
-    /// "the Apple SF I liked" (Ranny); plain SF stays one tap away.
     @AppStorage("messageFont") private var messageFontKey = "newyork"
     @AppStorage("messageFontSize") private var messageFontSize = 17.0
     private let faded: Double = 0.4
 
-    private var messageFont: Font {
-        switch messageFontKey {
-        case "system": return .system(size: messageFontSize)
-        case "mono": return .system(size: messageFontSize, design: .monospaced)
-        case "menlo": return .custom("Menlo", size: messageFontSize)
-        case "iowan": return .custom("Iowan Old Style", size: messageFontSize)
-        case "charter": return .custom("Charter", size: messageFontSize)
-        case "georgia": return .custom("Georgia", size: messageFontSize)
-        case "palatino": return .custom("Palatino", size: messageFontSize)
-        case "ubuntu": return .custom("Ubuntu", size: messageFontSize)
-        default: return .system(size: messageFontSize, design: .serif)   // newyork
-        }
-    }
+    private var messageFont: Font { readingFont(messageFontKey, size: messageFontSize) }
 
     private var isLive: Bool { client.nowPlayingClip?.id == clip.id }
 
@@ -606,12 +679,9 @@ private struct MessageBlock: View {
             }
         }
         .padding(.horizontal, 12)
-        // Breathing room at both ends — inside the measured height, so a tall
-        // message's scroll range includes it and small text stays centered.
-        .padding(.vertical, 28)
-        // Paragraph positions measure against this space — the same padded
-        // block whose height TextHeightKey reports, so offsets line up.
-        .coordinateSpace(name: "msgContent")
+        // Breathing room + the "msgContent" coordinate space moved UP to the
+        // turn container (input build) — paragraph positions measure against
+        // the whole turn, which is what the pager's landings scroll.
     }
 
     private func paragraphOpacity(_ seq: Int) -> Double {
@@ -620,39 +690,85 @@ private struct MessageBlock: View {
     }
 }
 
+// MARK: - His side of the turn
+
+/// One of Ranny's prompts, as sent — from either surface (the Echo field or
+/// the terminal; the status shim mirrors both). A satin bubble a shade
+/// lighter than the ground, pinned trailing: the chat idiom marks whose
+/// voice it is, and the lighter tone is the spec's "user inputs lighter".
+private struct PromptBubble: View {
+    let clip: Clip
+
+    @AppStorage("messageFont") private var messageFontKey = "newyork"
+    @AppStorage("messageFontSize") private var messageFontSize = 17.0
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 44)
+            Text(clip.text)
+                .font(readingFont(messageFontKey, size: max(messageFontSize - 1, 12)))
+                .lineSpacing(4)
+                .multilineTextAlignment(.leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(
+                    RoundedRectangle(cornerRadius: 17, style: .continuous)
+                        .fill(Color.primary.opacity(0.08))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                        )
+                )
+        }
+        .padding(.horizontal, 12)
+    }
+}
+
 // MARK: - Transport
 
-/// The single control row (cockpit rounding, 08-21): media transport on the
-/// left using the free space, the mode cluster pinned right — auto-play
-/// (bolt), reasoning/full-play (segmented icons), mute (speaker). "Play
-/// again" is gone: any paragraph is a play button. The old status row died —
-/// status + Settings live in the app menu now; quitting the app is the off
-/// switch. The height saved is reserved for user input, coming later.
+/// The control surface (cockpit rounding, 08-21; reshaped for the input
+/// build): the mode cluster is auto-play (speaker — it inherited mute's icon
+/// when mute retired as redundant) + reasoning/full-play (segmented icons).
+/// "Play again" is gone: any paragraph is a play button. Mac = one row,
+/// transport left, modes right. iPhone = TWO rows (the narrow width made one
+/// claustrophobic): counter + modes up top, the media transport full-width
+/// beneath, only while something is in flight.
 struct TransportBar: View {
     @ObservedObject var client: EchoClient
     @AppStorage("autoPlay") private var autoPlay = true
     @AppStorage("walkieMode") private var walkieMode = true
-    @AppStorage("muted") private var muted = false
     @State private var scrubbing = false
     @State private var scrubTime: TimeInterval = 0
 
     var body: some View {
-        HStack(spacing: 12) {
-            if client.nowPlayingClip != nil {
-                liveControls
-            } else {
-                if let open = client.openClip {
-                    Text(open.displayedAt, style: .time)
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+        #if os(iOS)
+        VStack(spacing: 10) {
+            HStack(spacing: 12) {
+                leadingInfo
                 Spacer()
+                modeCluster
             }
-            modeCluster
+            if client.nowPlayingClip != nil {
+                HStack(spacing: 12) { transportControls }
+            }
         }
         .frame(minHeight: 30)
         // Transport layout changes (play/pause/stop/gate/render) glide
         // instead of snapping (Ranny, orb polish pass).
         .animation(.easeInOut(duration: 0.22), value: transportKey)
+        #else
+        HStack(spacing: 12) {
+            leadingInfo
+            if client.nowPlayingClip != nil {
+                transportControls
+            } else {
+                Spacer()
+            }
+            modeCluster
+        }
+        .frame(minHeight: 30)
+        .animation(.easeInOut(duration: 0.22), value: transportKey)
+        #endif
     }
 
     private var transportKey: String {
@@ -660,16 +776,30 @@ struct TransportBar: View {
         "\(client.awaitingContinue)|\(client.awaitingRender)"
     }
 
+    /// Far left: the chunk counter while playing, the open turn's time otherwise.
+    @ViewBuilder private var leadingInfo: some View {
+        if let clip = client.nowPlayingClip {
+            if let chunks = clip.chunks, !chunks.isEmpty {
+                Text("\(min(client.currentChunk + 1, chunks.count)) of \(chunks.count)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+        } else if let open = client.openClip {
+            Text(open.displayedAt, style: .time)
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
     private var modeCluster: some View {
         HStack(spacing: 12) {
             Button { autoPlay.toggle() } label: {
-                Image(systemName: "bolt.fill")
+                Image(systemName: autoPlay ? "speaker.wave.2.fill" : "speaker.slash.fill")
                     .foregroundStyle(autoPlay ? AnyShapeStyle(.tint)
                                               : AnyShapeStyle(.secondary))
             }
             .buttonStyle(.plain)
-            .help(autoPlay ? "Auto-play on — arrivals play by the rail's routing. Click to require a tap."
-                           : "Auto-play off — messages wait for your tap.")
+            .help(autoPlay ? "Auto-play on — arrivals play by the rail's routing. Click to make messages wait for your tap."
+                           : "Auto-play off — messages arrive silently and wait for your tap.")
             Picker("", selection: $walkieMode) {
                 Image(systemName: "brain").tag(true)
                 Image(systemName: "infinity").tag(false)
@@ -678,24 +808,11 @@ struct TransportBar: View {
             .frame(width: 76)
             .help(walkieMode ? "Reasoning — pause at each part; Continue plays the next."
                              : "Full play — messages play straight through.")
-            Button { muted.toggle() } label: {
-                Image(systemName: muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                    .foregroundStyle(muted ? AnyShapeStyle(.orange)
-                                           : AnyShapeStyle(.tint))
-            }
-            .buttonStyle(.plain)
-            .help(muted ? "Muted — messages arrive and wait silently. Click to unmute."
-                        : "Mute — keep receiving, never auto-play.")
         }
     }
 
-    @ViewBuilder private var liveControls: some View {
-        if let clip = client.nowPlayingClip {
-            if let chunks = clip.chunks, !chunks.isEmpty {
-                Text("\(min(client.currentChunk + 1, chunks.count)) of \(chunks.count)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
+    @ViewBuilder private var transportControls: some View {
+        if client.nowPlayingClip != nil {
             Button { client.restartClip() } label: {
                 Image(systemName: "backward.end.fill")
             }

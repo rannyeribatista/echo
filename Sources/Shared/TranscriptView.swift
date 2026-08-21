@@ -76,8 +76,6 @@ final class PagerEngine: ObservableObject {
     /// Hit test: does this event belong to the pager's screen area?
     var hitTest: ((NSEvent) -> Bool)?
 
-    /// Diagnostics sink (drive instrumentation — wired to the app log ring).
-    var debugLog: ((String) -> Void)?
     /// Raw accumulated pull past an edge (signed; + = top).
     private var pull: CGFloat = 0
     /// Swallow leftovers (rest of gesture + momentum) after a switch fires.
@@ -161,11 +159,9 @@ final class PagerEngine: ObservableObject {
             pendingLandOffset = nil
             pendingLandAtBottom = false
             innerOffset = min(max(off, 0), maxOff)
-            debugLog?("land offset=\(Int(innerOffset)) maxOff=\(Int(maxOff))")
         } else if pendingLandAtBottom {
             pendingLandAtBottom = false
             innerOffset = maxOff
-            debugLog?("land bottom maxOff=\(Int(maxOff))")
         } else {
             innerOffset = min(innerOffset, maxOff)
         }
@@ -324,7 +320,6 @@ struct TranscriptView: View {
         .onAppear {
             engine.onSwitch = { dir in switchPage(dir) }
             engine.currentId = current?.id
-            engine.debugLog = { [weak client] in client?.log.add("pager: \($0)") }
             engine.install()
         }
         .onDisappear { engine.remove() }
@@ -336,11 +331,6 @@ struct TranscriptView: View {
         .onChange(of: current?.id) { id in
             #if os(macOS)
             engine.pageDidChange(to: id)
-            client.log.add("pager: current idx=\(currentIndex)/\(ordered.count - 1) " +
-                           "id=\(id?.uuidString.prefix(5) ?? "nil") " +
-                           "last=\(ordered.last?.id.uuidString.prefix(5) ?? "nil") " +
-                           "pageId=\(pageId?.uuidString.prefix(5) ?? "nil") " +
-                           "live=\(client.nowPlayingClip?.id.uuidString.prefix(5) ?? "none")")
             #endif
         }
         .onChange(of: client.openClip?.id) { newId in
@@ -382,9 +372,6 @@ struct TranscriptView: View {
         guard ordered.indices.contains(ni) else { return false }
         let next = ordered[ni]
         lastDir = dir
-        client.log.add("pager: switch dir=\(dir) \(currentIndex)→\(ni)/\(ordered.count - 1) " +
-                       "to=\(next.id.uuidString.prefix(5)) " +
-                       "isLive=\(next.id == client.nowPlayingClip?.id)")
         prepareLanding(for: next, dir: dir)
         withAnimation(springForSwitch) { pageId = next.id }
         client.select(next)
@@ -397,14 +384,10 @@ struct TranscriptView: View {
     /// above (the reading position); entering from above lands at its top.
     private func prepareLanding(for clip: Clip, dir: Int) {
         #if os(macOS)
-        let liveMatch = clip.id == client.nowPlayingClip?.id
-        if liveMatch, let y = chunkFrames[clip.id]?[client.currentChunk] {
-            client.log.add("pager: landing on chunk \(client.currentChunk) y=\(Int(y))")
+        if clip.id == client.nowPlayingClip?.id,
+           let y = chunkFrames[clip.id]?[client.currentChunk] {
             engine.prepareForNewPage(landAtOffset: max(y - 80, 0))
         } else {
-            client.log.add("pager: landing \(dir < 0 ? "bottom" : "top") " +
-                           "(liveMatch=\(liveMatch) frames=\(chunkFrames[clip.id]?.count ?? -1) " +
-                           "chunk=\(client.currentChunk))")
             engine.prepareForNewPage(landAtBottom: dir < 0)
         }
         #endif
@@ -593,8 +576,8 @@ struct TransportBar: View {
             .help(autoPlay ? "Auto-play on — arrivals play by the rail's routing. Click to require a tap."
                            : "Auto-play off — messages wait for your tap.")
             Picker("", selection: $walkieMode) {
-                Image(systemName: "playpause.fill").tag(true)
-                Image(systemName: "play.fill").tag(false)
+                Image(systemName: "brain").tag(true)
+                Image(systemName: "infinity").tag(false)
             }
             .pickerStyle(.segmented)
             .frame(width: 76)

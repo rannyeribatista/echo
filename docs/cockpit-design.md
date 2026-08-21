@@ -151,25 +151,41 @@ exits before its async Stop hook runs and strands a "working" ring (candidate:
 server-side working→ready decay) · lane display names are raw cwd basenames
 (mapping belongs to the profile-pictures pass).
 
-**Resolved from the second live-drive pass (same day) — the transcript.**
-Ranny's spec, built hot: the content area is one chat-style scroll — oldest at
-top, current message at the bottom, scroll up for history; message text 2×
-(20pt), unboxed, filling the window; thin time separators between messages;
-the transport extracted to a fixed bar on top; text mechanics kept (tap a
-paragraph to play from it). Fade hierarchy: unselected messages wear the
-played fade (0.4) · the selected message reads strong · while audio plays,
-only the sounding paragraph stays strong and its siblings drop to the
-unselected fade. Magnetic edges: scroll-settle snaps to message bottoms
-(90pt radius, bottom-aligned = the reading position) so crossing a message
-edge takes a deliberate push, while long messages stay freely scrollable
-inside. Pass 2 (same drive): SwiftUI's `ScrollTargetBehavior` turned out
-inert on macOS trackpad scrolling (the AppKit scroll bridge never consults
-it) — replaced with an offset settle-watcher: a 220ms debounce re-armed on
-every scroll tick; on settle within the radius, a spring (response 0.35,
-damping 0.78) pops the view to the message's bottom. Those three numbers ARE
-the elasticity tuning; full needle-into-cell drag resistance would still
-need NSScrollView physics. Text finalized 17pt centered; a true bottom
-anchor (+20pt tail) fixed last-line clipping.
+**Resolved across the live drive (same day) — the MESSAGE PAGER, the final
+Stop-3 shape.** Four passes of scroll mechanics taught the lesson the hard
+way: modern SwiftUI ScrollView on macOS is not NSScrollView-backed —
+`ScrollTargetBehavior`, GeometryReader offset preferences, and clip-view
+observation all had nothing to hook. The final design (Ranny's redesign)
+stops asking the framework: **one message fills the pane** — small text
+vertically centered (17pt, centered alignment, 28pt breathing at both ends),
+tall text scrolling within its container — and an NSEvent scroll-wheel
+monitor over the pager area drives all physics. Pushing past a message's
+edge is the page switch: rubber-banded elastic pull (asymptotic 90/140
+curve), 150pt threshold, springs 0.42/0.85 (switch) and 0.3/0.8 (release);
+gesture deltas count toward the pull, momentum only scrolls — crossing an
+edge takes a deliberate push. Entering from below lands at the message's
+bottom; a LIVE message lands on its sounding paragraph (per-message
+paragraph-position maps) so the highlight follows you back. Floating
+arrow-down button returns to the newest and re-arms follow-the-newest.
+Fades: the page reads strong; while audio plays only the sounding paragraph
+stays strong. iOS: same layout, native inner scroll, no edge gesture yet.
+
+Bugs the drive caught and killed: per-page height clobbering during switch
+transitions (two alive pages shared one scalar) · the stale-capture bug (the
+engine's onSwitch closure froze the clips array at onAppear — lists must
+derive from the client reference) · double-reproduction (stale auto-play
+tickets + selectLane queueing the sounding message behind itself) · the
+preamble predating the rail (owner-gated worker openings; now flag-gated
+like nic-say, with per-session dedup state/hash).
+
+**Cockpit rounding (drive close):** the status row died — status (dot + one
+word, no counters) and Settings live in the Echo app menu; quit is the off
+switch. "Stop listening" became MUTE (messages arrive and light dots, never
+auto-play, taps still obey). One control row: transport left, right cluster =
+auto-play (bolt) · reasoning/full-play segmented (brain/infinity) · mute
+(speaker). "Play again" gone — every paragraph is a play button. Freed height
+reserved for user input (next iteration). Full lifecycle verified live:
+ready → working → finished → ghost on a fresh terminal lane, closed by hand.
 
 **Design notes (recommendations, revisit from use):** render every worker turn
 v0 — background audio has no latency requirement; defer-render-until-opened is

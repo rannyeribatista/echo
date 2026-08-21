@@ -648,35 +648,51 @@ private struct MessageBlock: View {
 
     var body: some View { content }
 
+    /// Nic's side of the turn (Ranny, input polish): a bubble too — muted
+    /// against the ground (his inputs stay the lighter tone), text set LEFT,
+    /// pinned leading with a trailing inset mirroring the prompt bubble.
     private var content: some View {
-        VStack(alignment: .center, spacing: 12) {
-            if let chunks = clip.chunks {
-                ForEach(chunks, id: \.seq) { chunk in
-                    Text(chunk.text)
+        HStack(alignment: .top, spacing: 0) {
+            VStack(alignment: .leading, spacing: 12) {
+                if let chunks = clip.chunks {
+                    ForEach(chunks, id: \.seq) { chunk in
+                        Text(chunk.text)
+                            .font(messageFont)
+                            .lineSpacing(5)
+                            .multilineTextAlignment(.leading)
+                            .strikethrough(chunk.failed)
+                            .opacity(paragraphOpacity(chunk.seq))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .onTapGesture { client.jump(to: chunk.seq, in: clip) }
+                            .background(GeometryReader { g in
+                                Color.clear.preference(
+                                    key: ChunkFramesKey.self,
+                                    value: [clip.id: [chunk.seq: g.frame(in: .named("msgContent")).minY]])
+                            })
+                    }
+                } else {
+                    Text(clip.text)
                         .font(messageFont)
                         .lineSpacing(5)
-                        .multilineTextAlignment(.center)
-                        .strikethrough(chunk.failed)
-                        .opacity(paragraphOpacity(chunk.seq))
-                        .frame(maxWidth: .infinity, alignment: .center)
+                        .multilineTextAlignment(.leading)
+                        .opacity(1)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                         .contentShape(Rectangle())
-                        .onTapGesture { client.jump(to: chunk.seq, in: clip) }
-                        .background(GeometryReader { g in
-                            Color.clear.preference(
-                                key: ChunkFramesKey.self,
-                                value: [clip.id: [chunk.seq: g.frame(in: .named("msgContent")).minY]])
-                        })
+                        .onTapGesture { client.play(clip) }
                 }
-            } else {
-                Text(clip.text)
-                    .font(messageFont)
-                    .lineSpacing(5)
-                    .multilineTextAlignment(.center)
-                    .opacity(1)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .contentShape(Rectangle())
-                    .onTapGesture { client.play(clip) }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            .background(
+                RoundedRectangle(cornerRadius: 17, style: .continuous)
+                    .fill(Color.primary.opacity(0.045))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 17, style: .continuous)
+                            .stroke(Color.primary.opacity(0.05), lineWidth: 1)
+                    )
+            )
+            Spacer(minLength: 44)
         }
         .padding(.horizontal, 12)
         // Breathing room + the "msgContent" coordinate space moved UP to the
@@ -741,9 +757,12 @@ struct TransportBar: View {
     @State private var scrubTime: TimeInterval = 0
 
     var body: some View {
-        #if os(iOS)
+        // Both platforms (input polish): the top row belongs to configuration
+        // only — mode chip, auto-play, walkie toggle, counter/time far left.
+        // The media transport gets its own full-width row beneath, present
+        // only while something is in flight.
         VStack(spacing: 10) {
-            HStack(spacing: 12) {
+            HStack(spacing: 8) {
                 leadingInfo
                 Spacer()
                 modeCluster
@@ -756,19 +775,6 @@ struct TransportBar: View {
         // Transport layout changes (play/pause/stop/gate/render) glide
         // instead of snapping (Ranny, orb polish pass).
         .animation(.easeInOut(duration: 0.22), value: transportKey)
-        #else
-        HStack(spacing: 12) {
-            leadingInfo
-            if client.nowPlayingClip != nil {
-                transportControls
-            } else {
-                Spacer()
-            }
-            modeCluster
-        }
-        .frame(minHeight: 30)
-        .animation(.easeInOut(duration: 0.22), value: transportKey)
-        #endif
     }
 
     private var transportKey: String {
@@ -791,7 +797,8 @@ struct TransportBar: View {
     }
 
     private var modeCluster: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
+            modeChip
             Button { autoPlay.toggle() } label: {
                 Image(systemName: autoPlay ? "speaker.wave.2.fill" : "speaker.slash.fill")
                     .foregroundStyle(autoPlay ? AnyShapeStyle(.tint)
@@ -808,6 +815,50 @@ struct TransportBar: View {
             .frame(width: 76)
             .help(walkieMode ? "Reasoning — pause at each part; Continue plays the next."
                              : "Full play — messages play straight through.")
+        }
+    }
+
+    /// The open lane's permission mode, colored, as a chip. Tapping asks the
+    /// server to cycle it (shift+tab into the session) and re-probe.
+    @ViewBuilder private var modeChip: some View {
+        if let lane = client.openLane {
+            let mode = client.laneStates[lane]?.mode
+            Button { client.cycleMode(lane) } label: {
+                HStack(spacing: 5) {
+                    Circle().fill(Self.modeColor(mode))
+                        .frame(width: 6, height: 6)
+                    Text(Self.modeLabel(mode))
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Self.modeColor(mode))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(Capsule().fill(Self.modeColor(mode).opacity(0.13)))
+            }
+            .buttonStyle(.plain)
+            .help("Permission mode of this lane's session — click to cycle (shift+tab).")
+        }
+    }
+
+    static func modeLabel(_ mode: String?) -> String {
+        switch mode {
+        case "default": return "default"
+        case "acceptEdits": return "accept edits"
+        case "plan": return "plan"
+        case "auto", "dontAsk": return "auto"
+        case "bypassPermissions": return "bypass"
+        default: return "mode"
+        }
+    }
+
+    static func modeColor(_ mode: String?) -> Color {
+        switch mode {
+        case "default": return .gray
+        case "acceptEdits": return .yellow
+        case "plan": return .green
+        case "auto", "dontAsk": return .orange
+        case "bypassPermissions": return .red
+        default: return .gray
         }
     }
 

@@ -352,6 +352,18 @@ final class EchoClient: ObservableObject {
         if let newest = clips.first(where: { $0.lane == lane }) {
             openClip = newest
         }
+        probeMode(lane)          // freshen the mode chip for the new pane
+    }
+
+    /// Refresh a lane's permission-mode chip: the server reads the pane's own
+    /// status line and folds the answer into the status snapshot (the long-
+    /// poll delivers it — no response parsing needed here).
+    func probeMode(_ lane: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            let enc = lane.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? lane
+            _ = try? await self.v2Get("/mode?lane=\(enc)", timeout: 10)
+        }
     }
 
     private func setOpenLane(_ lane: String?) {
@@ -469,6 +481,7 @@ final class EchoClient: ObservableObject {
         }
         task = Task { await loop() }
         statusTask = Task { await statusLoop() }
+        if let l = openLane { probeMode(l) }     // best-effort chip warm-up
     }
 
     func stop() {
@@ -547,6 +560,7 @@ final class EchoClient: ObservableObject {
         let ts: Double?
         let links: [LaneLink]?
         let confirm: ConfirmInfo?
+        let mode: String?       // default|acceptEdits|plan|auto|bypassPermissions
     }
 
     /// The /v2/status long-poll answer: a fold counter + the full snapshot.

@@ -30,13 +30,14 @@ struct LaneInfo: Identifiable {
 /// The sphere's wall (experimental, may roll back — Ranny): a circle whose
 /// radius yields with small gaussian bulges where the ribbon presses it.
 struct BulgeCircle: InsettableShape {
+    var radius: Double
     var angles: [Double]
     var amounts: [Double]
     var insetAmount: CGFloat = 0
 
     func path(in rect: CGRect) -> Path {
         let c = CGPoint(x: rect.midX, y: rect.midY)
-        let baseR = Double(min(rect.width, rect.height) / 2 - insetAmount)
+        let baseR = radius - Double(insetAmount)
         var path = Path()
         let n = 72
         for i in 0...n {
@@ -133,16 +134,16 @@ struct LaneCircle: View {
 
     var body: some View {
         Button(action: open) {
-            VStack(spacing: 4) {
+            VStack(spacing: 7) {
                 orb
-                    .frame(width: 70, height: 70)
+                    .frame(width: 78, height: 78)
                     .overlay(alignment: .bottomTrailing) {
                         if info.isMain {
                             Image(systemName: "star.circle.fill")
                                 .font(.system(size: 15))
                                 .symbolRenderingMode(.multicolor)
                                 .background(Circle().fill(.background))
-                                .offset(x: -6, y: -6)
+                                .offset(x: -11, y: -11)
                         }
                     }
                 Text(info.displayName)
@@ -245,7 +246,7 @@ struct LaneCircle: View {
             // style), with a fainter phase-shifted sibling for the folds.
             Canvas { ctx, size in
                 let c = CGPoint(x: size.width / 2, y: size.height / 2)
-                let R = Double(min(size.width, size.height) / 2)
+                let R = 27.0                       // sphere radius — NOT the canvas rect
                 let cx = Double(c.x)
                 let cy = Double(c.y)
                 func ribbon(longitude: Double, wobSeed: Double, alpha: Double) {
@@ -301,7 +302,11 @@ struct LaneCircle: View {
                 ribbon(longitude: longitude + 2.3, wobSeed: seed * 3 + 1.7, alpha: 0.55)
             }
         }
-        .scaleEffect(1.09)          // paint past the rim so bulges have body
+        // A 66pt canvas around a 27r sphere: every layer paints well past the
+        // wall's maximum bulge (30), so nothing can guillotine a push — the
+        // 1.09 scale trick could not save the Canvas, which rasterizes only
+        // its own rect (the true source of Ranny's straight cuts).
+        .frame(width: 66, height: 66)
         .clipShape(wall)
         // The atmosphere (earth-limb treatment): a blurred bright rim melts
         // the sharp clip edge, and the twin glows burn brighter — stronger,
@@ -310,12 +315,7 @@ struct LaneCircle: View {
             wall.strokeBorder(pal.light.opacity(0.75), lineWidth: 1.6)
                 .blur(radius: 2.2)
         }
-        // The shadow modifiers rasterize this subtree at its bounds — the
-        // bulge tips and limb blur were poking past that buffer and getting
-        // guillotined at the rect edge (Ranny's straight-cut artifact).
-        // Fix: fix the sphere at 54 and pad the raster canvas around it.
-        .frame(width: 54, height: 54)
-        .padding(8)
+        .padding(6)
         .shadow(color: pal.light.opacity(0.85), radius: 2.5)
         .shadow(color: pal.swirl.opacity(0.45), radius: 6)
         .scaleEffect(1 + (isSpeaking ? min(level, 1) * 0.22 : 0))
@@ -351,7 +351,7 @@ struct LaneCircle: View {
                 amounts.append(min((dist - thr) * 0.8, 3.0))
             }
         }
-        return BulgeCircle(angles: angles, amounts: amounts)
+        return BulgeCircle(radius: R0, angles: angles, amounts: amounts)
     }
 
     private var paletteKey: String {

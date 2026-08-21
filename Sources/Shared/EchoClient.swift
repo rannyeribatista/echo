@@ -360,6 +360,7 @@ final class EchoClient: ObservableObject {
         return base
             .replacingOccurrences(of: "-", with: " ")
             .replacingOccurrences(of: "_", with: " ")
+            .capitalized
     }
 
     func renameLane(_ lane: String, to newName: String) {

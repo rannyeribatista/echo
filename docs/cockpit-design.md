@@ -293,6 +293,23 @@ still missing collapses onto two primitives, both now in hand —
 investigation (To-Do, 📅 08-25) should precede or ride along — the input surface
 deserves 60fps.
 
+**BUILD EXECUTED (2026-08-21 night, post-compact).** Everything above is live:
+server /prompt + /keys (herdr dispatch, lane→pane via `agent list`; key
+allowlist), /confirm round-trip (nic-confirm.sh sync PermissionRequest hook →
+Allow/Deny in the apps' ConfirmStrip → decision JSON; 25s fallback to the
+terminal dialog), user prompts mirrored as role:"user" chunkless manifests
+(BOTH surfaces — Echo field and terminal), prompt_id through the whole queue
+chain (nic-status stash → .pid sidecar → NIC_PROMPT → manifests/sidecars),
+turn containers in the pager (String page ids; a page = bubble + opening +
+final), PromptBar glass field both platforms, mode cycle in the orb context
+menu. E2E proof: injected prompt → Nic (home) → reply manifest carried the
+same prompt UUID — one turn page. Deployed: core main + echo main, canonical
+Mac relaunched. Deferred: AskUserQuestion native rendering (attention orb +
+free-text injection cover the flow meanwhile). Pending at close: phone
+install (device unreachable), PermissionRequest hook wire in settings.json
+(classifier blocked the edit — needs Ranny's hand; snippet in the session
+close-out).
+
 **Ride-along adjustments (Ranny, 2026-08-21 night — ship with the input build):**
 - iPhone: the transport is claustrophobic in the narrow width — audio controls
   (buttons + scrubber + Continue) move to a NEW ROW beneath the mode row;

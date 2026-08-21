@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreAudio
 import Foundation
 
 /// macOS half of the duck contract (ClipPlayer). iOS gets ducking from
@@ -22,10 +23,21 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     private var player: AVAudioPlayer?
     private var onFinish: ((Double) -> Void)?
     private var engine: TapEngine?
+    private var engineTargets: Set<AudioObjectID> = []
     private var progressTimer: DispatchSourceTimer?
     private var releaseTimer: DispatchSourceTimer?
+    private var engineTeardownTimer: DispatchSourceTimer?
     private var activity: NSObjectProtocol?
     private let scriptDucker = ScriptDucker()
+
+    /// Tap hold (2026-08-21): the audible seams are the PATH HANDOFFS — taking
+    /// over the apps' speaker path (a few ms of dropout while the mute lands
+    /// before our first write) and handing it back (the re-render runs one IO
+    /// cycle late, so release skips those in-flight ms). At unity gain the
+    /// passthrough is inaudible, so after a release the tap stays warm this
+    /// long: mid-conversation ducks become pure gain ramps (~one IO cycle,
+    /// seamless) and the seam pair happens once per burst, not per message.
+    private let tapHoldSeconds = 30
 
     /// Duck hold (2026-08-21): a finished clip does NOT release the duck
     /// immediately — it waits this long, and any new clip inside the window
@@ -70,10 +82,14 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     func endListening() {
         queue.async {
             if self.player != nil { self.finishClipLocked(releaseNow: true) }
-            // A pending hold with no new clip coming: let go immediately.
+            // A pending hold with no new clip coming: let go immediately —
+            // listening ended, so the warm tap goes too.
             self.releaseTimer?.cancel()
             self.releaseTimer = nil
-            if self.engine != nil { self.releaseDuckLocked() }
+            if self.engine != nil {
+                self.releaseDuckLocked()
+                self.stopEngineLocked(settle: true)
+            }
             if let a = self.activity {
                 ProcessInfo.processInfo.endActivity(a)
                 self.activity = nil
@@ -187,38 +203,69 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
         // it is — no swell, no re-dip.
         releaseTimer?.cancel()
         releaseTimer = nil
+        engineTeardownTimer?.cancel()
+        engineTeardownTimer = nil
         if duckMode == "applescript" {
             scriptDucker.duck(to: Double(duckGain))
             return
         }
-        guard engine == nil else { return }
         do {
             let targets = try listAudioProcesses()
                 .filter { $0.isRunningOutput && $0.pid != getpid() }
-            guard !targets.isEmpty else { return }
+            guard !targets.isEmpty else { return }   // a warm tap idles at unity; nothing audible to duck
+            let ids = Set(targets.map(\.objectID))
+            if let e = engine {
+                if ids.isSubset(of: engineTargets) {
+                    // Warm re-engage: no handoff, just the ramp (~one IO cycle).
+                    e.setGain(duckGain, rampMs: rampMs)
+                    return
+                }
+                // Something new is audible (fresh app started mid-hold): the
+                // held tap can't duck it. Rebuild — we're at unity, so the
+                // handoff seams stay level-matched.
+                stopEngineLocked(settle: false)
+            }
             let e = TapEngine()
             try e.start(processObjectIDs: targets.map(\.objectID))
             engine = e
+            engineTargets = ids
             usleep(100_000)                          // settle the takeover seam at unity
             e.setGain(duckGain, rampMs: rampMs)
             e.waitForRamp(timeoutMs: rampMs + 500)
         } catch {
             engine?.stop()
             engine = nil
+            engineTargets = []
             emitLog("duck engage failed — \(error.localizedDescription); playing un-ducked")
         }
     }
 
-    /// Ramp back to unity BEFORE teardown, settle, then drop the tap — the
-    /// music's own path resumes at the level it left.
+    /// Ramp back to unity, then keep the tap WARM (tapHoldSeconds) — the
+    /// handoff back to the apps' own path is the audible seam, so it runs
+    /// only after a real lull, not between messages.
     private func releaseDuckLocked() {
         if duckMode == "applescript" { scriptDucker.restore() }
         guard let e = engine else { return }
         e.setGain(1.0, rampMs: rampMs)
         e.waitForRamp(timeoutMs: rampMs + 500)
-        usleep(100_000)
+        engineTeardownTimer?.cancel()
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + .seconds(tapHoldSeconds))
+        t.setEventHandler { [weak self] in self?.stopEngineLocked(settle: true) }
+        t.resume()
+        engineTeardownTimer = t
+    }
+
+    /// Actually drop the tap — the apps' own speaker path resumes. Only ever
+    /// called at unity gain (release ramped there; rebuilds happen pre-duck).
+    private func stopEngineLocked(settle: Bool) {
+        engineTeardownTimer?.cancel()
+        engineTeardownTimer = nil
+        guard let e = engine else { return }
+        if settle { usleep(100_000) }
         e.stop()
         engine = nil
+        engineTargets = []
     }
 
     /// Settings' "Test duck": duck whatever is audible for ~2 s and measure

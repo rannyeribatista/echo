@@ -74,6 +74,17 @@ final class TapEngine {
                   "AudioHardwareCreateAggregateDevice")
         aggID = agg
 
+        // Shrink the IO cycle (default 512 frames ≈ 10.7 ms → 128 ≈ 2.7 ms).
+        // The audible seams — the engage dropout and the release-time jump —
+        // are one IO cycle wide, so this pushes them under perception.
+        // Best-effort: a device that refuses keeps its default and everything
+        // still works, just with the old seam width. CPU impact ~nil (spike
+        // measured 0.0-0.1% at 512).
+        var ioFrames: UInt32 = 128
+        var bufAddr = address(kAudioDevicePropertyBufferFrameSize)
+        AudioObjectSetPropertyData(aggID, &bufAddr, 0, nil,
+                                   UInt32(MemoryLayout<UInt32>.size), &ioFrames)
+
         let st = state
         var procID: AudioDeviceIOProcID?
         try check(AudioDeviceCreateIOProcIDWithBlock(&procID, aggID, queue) {

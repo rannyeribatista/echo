@@ -135,13 +135,14 @@ struct LaneCircle: View {
         Button(action: open) {
             VStack(spacing: 4) {
                 orb
-                    .frame(width: 54, height: 54)
+                    .frame(width: 70, height: 70)
                     .overlay(alignment: .bottomTrailing) {
                         if info.isMain {
                             Image(systemName: "star.circle.fill")
                                 .font(.system(size: 15))
                                 .symbolRenderingMode(.multicolor)
                                 .background(Circle().fill(.background))
+                                .offset(x: -6, y: -6)
                         }
                     }
                 Text(info.displayName)
@@ -227,12 +228,14 @@ struct LaneCircle: View {
                     center: .center))
                 .rotationEffect(.radians(phase * 0.8))
                 .blur(radius: 5)
+                .animation(nil, value: paletteKey)
             Circle()
                 .fill(AngularGradient(
                     colors: [.clear, identityTint.opacity(0.30), .clear],
                     center: .center))
                 .rotationEffect(.radians(-phase * 1.35 + 2))
                 .blur(radius: 7)
+                .animation(nil, value: paletteKey)
             // The fluid interior (orb v4, after the Dribbble reference):
             // a chromatic RIBBON — Ranny's pole-to-pole line — pinned at both
             // poles, skewing drastically along its run, rotating a full
@@ -307,6 +310,12 @@ struct LaneCircle: View {
             wall.strokeBorder(pal.light.opacity(0.75), lineWidth: 1.6)
                 .blur(radius: 2.2)
         }
+        // The shadow modifiers rasterize this subtree at its bounds — the
+        // bulge tips and limb blur were poking past that buffer and getting
+        // guillotined at the rect edge (Ranny's straight-cut artifact).
+        // Fix: fix the sphere at 54 and pad the raster canvas around it.
+        .frame(width: 54, height: 54)
+        .padding(8)
         .shadow(color: pal.light.opacity(0.85), radius: 2.5)
         .shadow(color: pal.swirl.opacity(0.45), radius: 6)
         .scaleEffect(1 + (isSpeaking ? min(level, 1) * 0.22 : 0))

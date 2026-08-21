@@ -3,136 +3,160 @@ import SwiftUI
 /// The transcript — the window's content area since the cockpit drive
 /// (2026-08-21, Ranny's spec): the open lane's messages as one chat-style
 /// scroll, oldest at the top, the current message living at the bottom.
-/// Message text is large and unboxed and takes the whole window; separators
-/// carry the time; scrolling snaps magnetically to message bottoms — push past
-/// an edge and it pops into the bottom of the message above. The transport
-/// lives in a fixed bar above (TransportBar); the text keeps its mechanics:
-/// tap a paragraph to play from it, the sounding paragraph leads, everything
-/// else fades to the unselected weight.
+/// Message text is large (17pt), centered, unboxed; separators carry the
+/// time; the transport lives in a fixed bar above (TransportBar). Tap a
+/// paragraph to play from it; the sounding paragraph leads, everything else
+/// fades to the unselected weight.
+///
+/// MAGNETIC EDGES, second pass: the first build used ScrollTargetBehavior,
+/// which macOS's scroll bridge never consulted for trackpad scrolling — the
+/// content ran free (Ranny's report). Now the view watches the scroll offset
+/// itself: when movement settles within `snapRadius` of a message's bottom,
+/// it springs there (bottom-aligned — the reading position). Long messages
+/// scroll free inside; crossing an edge takes a deliberate push, and the
+/// spring gives the pop its elasticity. Tunables: radius + spring below.
 
-/// Content-space bottom edges of every message, measured by preference and
-/// read by the snap behavior at scroll-settle time.
+/// Content-space bottom edge of every message, keyed by clip id.
 private struct MessageBottomsKey: PreferenceKey {
-    static var defaultValue: [CGFloat] = []
-    static func reduce(value: inout [CGFloat], nextValue: () -> [CGFloat]) {
-        value.append(contentsOf: nextValue())
+    static var defaultValue: [UUID: CGFloat] = [:]
+    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
+        value.merge(nextValue()) { $1 }
     }
 }
 
-final class SnapModel {
-    var bottoms: [CGFloat] = []
-}
-
-/// Magnetic message edges: if a scroll would settle within `snapRadius` of a
-/// message's bottom, it pops there (bottom-aligned, the reading position);
-/// otherwise it runs free — so a message taller than the window stays fully
-/// readable, and crossing into the next message takes a deliberate push.
-@available(macOS 14.0, iOS 17.0, *)
-private struct MessageSnapBehavior: ScrollTargetBehavior {
-    let model: SnapModel
-    static let snapRadius: CGFloat = 90
-
-    func updateTarget(_ target: inout ScrollTarget, context: ScrollTargetBehaviorContext) {
-        let container = context.containerSize.height
-        guard container > 0, !model.bottoms.isEmpty else { return }
-        let proposedBottom = target.rect.minY + container
-        guard let nearest = model.bottoms.min(by: {
-            abs($0 - proposedBottom) < abs($1 - proposedBottom)
-        }) else { return }
-        if abs(nearest - proposedBottom) <= Self.snapRadius {
-            let maxOffset = max(context.contentSize.height - container, 0)
-            target.rect.origin.y = min(max(nearest - container, 0), maxOffset)
-        }
-    }
-}
-
-private struct SnapIfAvailable: ViewModifier {
-    let model: SnapModel
-    func body(content: Content) -> some View {
-        if #available(macOS 14.0, iOS 17.0, *) {
-            content.scrollTargetBehavior(MessageSnapBehavior(model: model))
-        } else {
-            content
-        }
-    }
+/// The whole content's frame in the viewport's space — minY is -scrollOffset.
+private struct ContentFrameKey: PreferenceKey {
+    static var defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
 }
 
 struct TranscriptView: View {
     @ObservedObject var client: EchoClient
     /// The open lane's history, newest-first as EchoClient keeps it.
     let clips: [Clip]
-    @State private var snapModel = SnapModel()
+
+    @State private var bottoms: [UUID: CGFloat] = [:]
+    @State private var contentFrame: CGRect = .zero
+    @State private var settleTask: Task<Void, Never>?
+
+    private static let bottomAnchor = "transcript-bottom"
+    /// How sticky a message edge is (pt): settle inside this radius and the
+    /// scroll pops to the boundary; beyond it, it stays where you left it.
+    private static let snapRadius: CGFloat = 90
+    private static let snapSpring: Animation = .spring(response: 0.35, dampingFraction: 0.78)
 
     private var ordered: [Clip] { clips.reversed() }
     private var newestId: UUID? { clips.first?.id }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 30) {
-                    ForEach(ordered) { clip in
-                        MessageBlock(client: client, clip: clip)
-                            .id(clip.id)
-                            .background(GeometryReader { g in
-                                Color.clear.preference(
-                                    key: MessageBottomsKey.self,
-                                    value: [g.frame(in: .named("transcriptContent")).maxY])
-                            })
+        GeometryReader { outer in
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .center, spacing: 0) {
+                        VStack(alignment: .center, spacing: 30) {
+                            ForEach(ordered) { clip in
+                                MessageBlock(client: client, clip: clip)
+                                    .id(clip.id)
+                                    .background(GeometryReader { g in
+                                        Color.clear.preference(
+                                            key: MessageBottomsKey.self,
+                                            value: [clip.id: g.frame(in: .named("transcriptContent")).maxY])
+                                    })
+                            }
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.top, 6)
+                        // Breathing room over the window edge, and a true
+                        // bottom anchor so "scrolled to the end" really shows
+                        // the last line (the cut-off fix).
+                        Color.clear.frame(height: 20)
+                            .id(Self.bottomAnchor)
                     }
+                    .coordinateSpace(name: "transcriptContent")
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: ContentFrameKey.self,
+                                               value: g.frame(in: .named("transcriptViewport")))
+                    })
                 }
-                .coordinateSpace(name: "transcriptContent")
-                .padding(.horizontal, 6)
-                .padding(.top, 6)
-                .padding(.bottom, 14)
+                .coordinateSpace(name: "transcriptViewport")
+                .onPreferenceChange(MessageBottomsKey.self) { bottoms = $0 }
+                .onPreferenceChange(ContentFrameKey.self) { frame in
+                    contentFrame = frame
+                    scheduleSnap(proxy, viewportHeight: outer.size.height)
+                }
+                .onAppear { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
+                .onChange(of: newestId) { _ in
+                    withAnimation { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
+                }
+                .onChange(of: client.openLane) { _ in
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
             }
-            .onPreferenceChange(MessageBottomsKey.self) { snapModel.bottoms = $0.sorted() }
-            .modifier(SnapIfAvailable(model: snapModel))
-            .onAppear {
-                if let id = newestId { proxy.scrollTo(id, anchor: .bottom) }
-            }
-            .onChange(of: newestId) { id in
-                if let id { withAnimation { proxy.scrollTo(id, anchor: .bottom) } }
-            }
-            .onChange(of: client.openLane) { _ in
-                if let id = newestId { proxy.scrollTo(id, anchor: .bottom) }
+        }
+    }
+
+    /// Debounced settle-watch: every offset change re-arms it; when the scroll
+    /// has been still for a beat, spring to the nearest message bottom if one
+    /// is within the magnetic radius.
+    private func scheduleSnap(_ proxy: ScrollViewProxy, viewportHeight: CGFloat) {
+        settleTask?.cancel()
+        let offsetAtSchedule = -contentFrame.minY
+        settleTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 220_000_000)
+            guard !Task.isCancelled else { return }
+            let offsetNow = -contentFrame.minY
+            guard abs(offsetNow - offsetAtSchedule) < 0.5 else { return }   // still moving
+            let contentH = contentFrame.height
+            guard viewportHeight > 0, contentH > viewportHeight, !bottoms.isEmpty else { return }
+            let viewportBottom = offsetNow + viewportHeight
+            guard let nearest = bottoms.min(by: {
+                abs($0.value - viewportBottom) < abs($1.value - viewportBottom)
+            }) else { return }
+            let distance = abs(nearest.value - viewportBottom)
+            if distance > 2, distance <= Self.snapRadius {
+                withAnimation(Self.snapSpring) {
+                    proxy.scrollTo(nearest.key, anchor: .bottom)
+                }
             }
         }
     }
 }
 
 /// One message in the transcript: a time separator, then the full text at
-/// reading size. Fade rules (Ranny's spec, 08-21): unselected messages wear
-/// the played-row fade; the selected message reads strong; and the moment a
-/// paragraph sounds, its siblings drop to the unselected fade so the sounding
-/// one carries the eye.
+/// reading size, centered. Fade rules (Ranny's spec, 08-21): unselected
+/// messages wear the played-row fade; the selected message reads strong; and
+/// the moment a paragraph sounds, its siblings drop to the unselected fade so
+/// the sounding one carries the eye.
 private struct MessageBlock: View {
     @ObservedObject var client: EchoClient
     let clip: Clip
 
-    private static let textSize: CGFloat = 20      // 2× the old footnote body
+    private static let textSize: CGFloat = 17
     private let faded: Double = 0.4
 
     private var isSelected: Bool { client.openClip?.id == clip.id }
     private var isLive: Bool { client.nowPlayingClip?.id == clip.id }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .center, spacing: 12) {
             separator
             if let chunks = clip.chunks {
                 ForEach(chunks, id: \.seq) { chunk in
                     Text(chunk.text)
                         .font(.system(size: Self.textSize))
+                        .multilineTextAlignment(.center)
                         .strikethrough(chunk.failed)
                         .opacity(paragraphOpacity(chunk.seq))
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .center)
                         .contentShape(Rectangle())
                         .onTapGesture { client.jump(to: chunk.seq, in: clip) }
                 }
             } else {
                 Text(clip.text)
                     .font(.system(size: Self.textSize))
+                    .multilineTextAlignment(.center)
                     .opacity(isSelected || isLive ? 1 : faded)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .center)
                     .contentShape(Rectangle())
                     .onTapGesture { client.play(clip) }
             }

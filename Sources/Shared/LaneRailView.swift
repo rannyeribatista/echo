@@ -328,7 +328,7 @@ struct LaneCircle: View {
                         var seg = Path()
                         seg.move(to: pts[i])
                         seg.addLine(to: pts[i + 1])
-                        ctx.stroke(seg, with: .color(Color.white.opacity(a)),
+                        ctx.stroke(seg, with: .color(pal.core.opacity(a)),
                                    lineWidth: (1.3 + 1.3 * e) * u)
                     }
                 }
@@ -388,35 +388,44 @@ struct LaneCircle: View {
         "\(info.state ?? "-")|\(info.unplayed > 0)|\(info.isGhost)"
     }
 
-    /// Status IS the color.
-    private var palette: (light: Color, dark: Color, swirl: Color) {
+    /// Status IS the color. `core` is the filament: the ribbon emits light in
+    /// the sphere's own spectrum — nearly white, tinted by the status hue
+    /// (Ranny: a green sphere carries an almost-white green line, violet an
+    /// almost-white violet, amber an almost-white amber).
+    private var palette: (light: Color, dark: Color, swirl: Color, core: Color) {
         if info.isGhost {
-            return (Color(white: 0.55), Color(white: 0.32), Color(white: 0.65))
+            return (Color(white: 0.55), Color(white: 0.32), Color(white: 0.65),
+                    Color(white: 0.95))
         }
         switch info.state {
         case "working":
             return (Color(hue: 0.47, saturation: 0.55, brightness: 0.88),
                     Color(hue: 0.52, saturation: 0.85, brightness: 0.42),
-                    Color(hue: 0.44, saturation: 0.70, brightness: 0.92))
+                    Color(hue: 0.44, saturation: 0.70, brightness: 0.92),
+                    Color(hue: 0.45, saturation: 0.32, brightness: 1.0))
         case "attention":
             return (Color(hue: 0.09, saturation: 0.65, brightness: 0.95),
                     Color(hue: 0.05, saturation: 0.90, brightness: 0.50),
-                    Color(hue: 0.12, saturation: 0.80, brightness: 0.95))
+                    Color(hue: 0.12, saturation: 0.80, brightness: 0.95),
+                    Color(hue: 0.10, saturation: 0.35, brightness: 1.0))
         case "ready":
             return (Color(hue: 0.58, saturation: 0.12, brightness: 0.72),
                     Color(hue: 0.60, saturation: 0.20, brightness: 0.40),
-                    Color(hue: 0.58, saturation: 0.15, brightness: 0.80))
+                    Color(hue: 0.58, saturation: 0.15, brightness: 0.80),
+                    Color(hue: 0.58, saturation: 0.15, brightness: 0.98))
         default:
             // finished (and feed-less lanes): Siri violet while something is
             // unheard, calm blue-gray once everything was listened to.
             if info.unplayed > 0 {
                 return (Color(hue: 0.72, saturation: 0.55, brightness: 0.92),
                         Color(hue: 0.78, saturation: 0.80, brightness: 0.45),
-                        Color(hue: 0.66, saturation: 0.70, brightness: 0.95))
+                        Color(hue: 0.66, saturation: 0.70, brightness: 0.95),
+                        Color(hue: 0.70, saturation: 0.30, brightness: 1.0))
             }
             return (Color(hue: 0.62, saturation: 0.18, brightness: 0.66),
                     Color(hue: 0.64, saturation: 0.28, brightness: 0.36),
-                    Color(hue: 0.60, saturation: 0.22, brightness: 0.75))
+                    Color(hue: 0.60, saturation: 0.22, brightness: 0.75),
+                    Color(hue: 0.62, saturation: 0.18, brightness: 0.96))
         }
     }
 

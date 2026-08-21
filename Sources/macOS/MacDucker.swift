@@ -26,7 +26,13 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     private var activity: NSObjectProtocol?
     private let scriptDucker = ScriptDucker()
 
-    private let duckGain: Float = 0.2
+    /// Residual music level while Nic speaks. 0.2 originally; 0.16 since
+    /// 2026-08-20 (Ranny: "duck 20% more"). Tunable without a rebuild:
+    /// `defaults write com.rannyeri.echo.mac duckGain -float 0.12`.
+    private var duckGain: Float {
+        UserDefaults.standard.object(forKey: "duckGain") != nil
+            ? UserDefaults.standard.float(forKey: "duckGain") : 0.16
+    }
     private let rampMs: Double = 60
 
     /// "tap" (default) or "applescript" — Settings writes it. The fallback

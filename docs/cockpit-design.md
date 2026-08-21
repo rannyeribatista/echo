@@ -232,3 +232,63 @@ seam.
 - At deploy: rebuild + re-sign both apps → then `ECHO_ALL_LANES=on` · board
   reflection is Nic's (single-writer) · core-side `integrity.sh baseline` +
   `./backup.sh` after the spec syncs.
+
+## Input phase — dispatch-ready spec (2026-08-21 night; build after token reset)
+
+> The cockpit becomes the primary interaction surface: type to any lane from
+> Echo (Mac AND phone) — no more app-switching to the terminal/Termius. Lays
+> the VoiceFlow rail: voice-in later lands on the same endpoint. Budget note:
+> deliberately NOT built same-day (14% Fable remaining); the one hard unknown
+> was spiked instead and is SOLVED.
+
+**The proven primitive (spike 2026-08-21, `it-really-works-42`):** herdr's CLI
+injects into panes — `herdr pane send-text <pane> <text>` + `herdr pane
+send-keys <pane> enter` executed a command in a live scratch pane, verified by
+filesystem side effect. Also available: `herdr agent send <target> <text>`
+(agent/session-addressed — herdr already knows session→pane from the very
+`report-agent-session` hook wired on this Mac), `herdr agent list` (the
+mapping), `herdr agent wait --status`, and **raw `send-keys`** (arrow keys,
+enter — and the mode-cycle chord, if herdr names it; verify `shift+tab` naming
+during build).
+
+**The pipe:** Echo app (input box) → `POST /prompt {lane, text}` on
+echo-server (token-gated, same pattern as /status and /links) → a small
+dispatcher resolves lane → session (the status feed's session ids) → `herdr
+agent send` (fallback: pane send-text via the session→pane map) + enter.
+Server-side, ~40 lines; phone works free via the same tailnet endpoint.
+
+**The UI (all owned territory):**
+- Turn containers: one magnetic page = user prompt + preamble + final. Group
+  key = `prompt_id` (hook payloads carry it — nic-say/nic-preamble/nic-status
+  pass it through sidecars/manifests; app groups clips by (lane, prompt_id)).
+- Bubbles: semi-transparent matte/satin, background-tone rule; Ranny's inputs
+  a lighter tone than Claude's outputs.
+- TERMINAL prompts appear too: `UserPromptSubmit` payload includes
+  `user_input` — the status shim posts it, so prompts typed in the terminal
+  render as bubbles in Echo. Both input surfaces converge in one transcript.
+- The input field: liquid glass (macOS/iOS 26 `glassEffect` where available,
+  `.ultraThinMaterial` fallback), send icon inside the trailing edge. Sits in
+  the height cleared by the cockpit rounding.
+
+**The full non-power-user horizon (Ranny's question, assessed):** everything
+still missing collapses onto two primitives, both now in hand —
+1. *Injection* (proven): free text → prompts · `/model …` and ANY slash
+   command → model switch + a future command palette · `send-keys` raw →
+   mode cycling (shift+tab) and dialog navigation (arrows/enter/number keys
+   for AskUserQuestion option picking — payload carries the full question +
+   options via PreToolUse `tool_input`, so Echo can RENDER the question
+   natively and inject the choice).
+2. *Decision hooks* (no injection needed at all): a `PermissionRequest` hook
+   can RETURN `{permissionDecision: allow|deny}` — so permission confirmations
+   can be a synchronous hook that asks echo-server "does Ranny approve?",
+   Echo shows Allow/Deny on the attention-orange orb (tool name + input in
+   the payload), the answer flows back as the hook's output. Cleaner than
+   keystrokes; timeout falls back to the terminal dialog untouched.
+   Verdict: a fully human-first Claude CLI face is genuinely reachable —
+   output ✓, links ✓, agent spawn (via prompt) ✓, input/model/slash =
+   injection, confirmations = decision hook, mode switch = raw keys.
+
+**Sizing:** UI + grouping ≈ ½–1 heavy day · dispatcher + shim pass-through ≈
+½ day · confirmations/mode/model each small once the base lands. Performance
+investigation (To-Do, 📅 08-25) should precede or ride along — the input surface
+deserves 60fps.

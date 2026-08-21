@@ -42,6 +42,19 @@ private struct BoxHeightKey: PreferenceKey {
     }
 }
 
+#if os(iOS)
+/// iOS page-switch signal: the inner scroll's content frame (minY + height)
+/// in the page's coordinate space — overscroll past either edge, held far
+/// enough, flips to the neighboring message (pull-to-refresh mechanics).
+private struct PhoneScrollKey: PreferenceKey {
+    static var defaultValue: [CGFloat] = []
+    static func reduce(value: inout [CGFloat], nextValue: () -> [CGFloat]) {
+        let n = nextValue()
+        if !n.isEmpty { value = n }
+    }
+}
+#endif
+
 /// Each paragraph's top edge within its message's content, per message —
 /// what lets a page-return land ON the sounding paragraph instead of the top.
 private struct ChunkFramesKey: PreferenceKey {
@@ -365,6 +378,29 @@ struct TranscriptView: View {
                       removal: .move(edge: .top).combined(with: .opacity))
     }
 
+    #if os(iOS)
+    @State private var phoneSwitchCooling = false
+
+    /// The phone's page switch: fires once when the bounce carries past the
+    /// threshold, re-arms when the scroll settles back near rest.
+    private func phoneOverscroll(minY: CGFloat, contentH: CGFloat,
+                                 viewportH: CGFloat) {
+        let topPull = minY                                   // > 0 = pulled past top
+        let bottomPull = viewportH - (minY + max(contentH, viewportH))
+        if phoneSwitchCooling {
+            if topPull < 8 && bottomPull < 8 { phoneSwitchCooling = false }
+            return
+        }
+        if topPull > 70 {
+            phoneSwitchCooling = true
+            _ = switchPage(-1)
+        } else if bottomPull > 70 {
+            phoneSwitchCooling = true
+            _ = switchPage(1)
+        }
+    }
+    #endif
+
     /// -1 = the message above (older) · +1 = below (newer). Returns whether
     /// there was a page to switch to.
     private func switchPage(_ dir: Int) -> Bool {
@@ -431,10 +467,26 @@ struct TranscriptView: View {
                     .preference(key: BoxHeightKey.self, value: box.size.height)
             }
             #else
-            // iOS: native scrolling inside the page — the Mac's wheel-driven
-            // offset machinery fought the inner ScrollView and froze it.
-            ScrollView {
-                MessageBlock(client: client, clip: clip)
+            // iOS: native scrolling inside the page; overscroll past either
+            // edge (the bounce) is the page switch — pull down hard at the
+            // top for the previous message, up at the bottom for the next.
+            GeometryReader { outer in
+                ScrollView {
+                    MessageBlock(client: client, clip: clip)
+                        .background(GeometryReader { g in
+                            Color.clear.preference(
+                                key: PhoneScrollKey.self,
+                                value: [g.frame(in: .named("pageScroll")).minY,
+                                        g.size.height])
+                        })
+                }
+                .coordinateSpace(name: "pageScroll")
+                .modifier(AlwaysBounce())
+                .onPreferenceChange(PhoneScrollKey.self) { v in
+                    guard v.count == 2 else { return }
+                    phoneOverscroll(minY: v[0], contentH: v[1],
+                                    viewportH: outer.size.height)
+                }
             }
             #endif
         }
@@ -474,6 +526,19 @@ struct TranscriptView: View {
         }
     }
 }
+
+#if os(iOS)
+/// Short messages can't bounce without this (no bounce = no page switch).
+private struct AlwaysBounce: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(iOS 16.4, *) {
+            content.scrollBounceBehavior(.always, axes: .vertical)
+        } else {
+            content
+        }
+    }
+}
+#endif
 
 // MARK: - One message's text
 

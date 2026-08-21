@@ -265,6 +265,8 @@ struct LaneOrbView: View {
     let phase: Double
     let isSpeaking: Bool
     let level: Double
+    /// Icon exporter's hook: a fixed palette instead of the status one.
+    var paletteOverride: (light: Color, dark: Color, swirl: Color, core: Color)? = nil
 
     /// Sphere radius at this size.
     private var sphereR: Double { 27 * unit }
@@ -439,6 +441,7 @@ struct LaneOrbView: View {
     /// (Ranny: a green sphere carries an almost-white green line, violet an
     /// almost-white violet, amber an almost-white amber).
     private var palette: (light: Color, dark: Color, swirl: Color, core: Color) {
+        if let o = paletteOverride { return o }
         if info.isGhost {
             return (Color(white: 0.55), Color(white: 0.32), Color(white: 0.65),
                     Color(white: 0.95))

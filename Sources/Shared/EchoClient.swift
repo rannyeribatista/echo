@@ -291,16 +291,22 @@ final class EchoClient: ObservableObject {
             let d = Date(timeIntervalSince1970: st.ts ?? 0)
             activity[lane] = max(activity[lane] ?? .distantPast, d)
         }
+        // Ghosting only makes sense once the feed has spoken: against an old
+        // server (empty feed) nothing can be told apart, so nothing ghosts.
+        let feedLive = !laneStates.isEmpty
         return activity.keys.map { key in
-            LaneInfo(id: key,
-                     state: laneStates[key]?.state,
-                     unplayed: unplayed[key] ?? 0,
-                     lastActivity: activity[key] ?? .distantPast,
-                     isMain: key == mainLane,
-                     isOpen: key == openLane)
+            let st = laneStates[key]
+            return LaneInfo(id: key,
+                            state: st?.state,
+                            unplayed: unplayed[key] ?? 0,
+                            lastActivity: activity[key] ?? .distantPast,
+                            isMain: key == mainLane,
+                            isOpen: key == openLane,
+                            isGhost: feedLive && (st == nil || st?.state == "closed"))
         }
         .sorted { a, b in
             if a.isMain != b.isMain { return a.isMain }
+            if a.isGhost != b.isGhost { return b.isGhost }   // living lanes lead
             return a.lastActivity > b.lastActivity
         }
     }

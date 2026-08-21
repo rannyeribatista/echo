@@ -14,6 +14,11 @@ struct LaneInfo: Identifiable {
     let lastActivity: Date
     let isMain: Bool
     let isOpen: Bool
+    /// A lane the status feed doesn't know (its session closed before it could
+    /// say so, or long ago): still tappable, clearly dead — dashed, dim, last —
+    /// and it vanishes with the 24h sweep (Ranny's call, 08-21: ghosts over
+    /// hiding, so open-vs-gone stays distinguishable at a glance).
+    let isGhost: Bool
 
     var displayName: String { id.isEmpty ? "untagged" : id }
 }
@@ -55,20 +60,29 @@ struct LaneCircle: View {
             VStack(spacing: 4) {
                 ZStack(alignment: .topTrailing) {
                     ZStack {
-                        Circle()
-                            .strokeBorder(ringColor, lineWidth: 3)
-                            .opacity(info.state == "working" && dim ? 0.4 : 1)
-                            .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true),
-                                       value: dim)
-                            .frame(width: 52, height: 52)
+                        if info.isGhost {
+                            Circle()
+                                .strokeBorder(Color.gray.opacity(0.45),
+                                              style: StrokeStyle(lineWidth: 2, dash: [5, 4]))
+                                .frame(width: 52, height: 52)
+                        } else {
+                            Circle()
+                                .strokeBorder(ringColor, lineWidth: 3)
+                                .opacity(info.state == "working" && dim ? 0.4 : 1)
+                                .animation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true),
+                                           value: dim)
+                                .frame(width: 52, height: 52)
+                        }
                         Circle()
                             .fill(info.isOpen ? Color.accentColor.opacity(0.18)
                                               : Color.primary.opacity(0.06))
                             .frame(width: 42, height: 42)
+                            .opacity(info.isGhost ? 0.55 : 1)
                         Text(initials)
                             .font(.system(size: 15, weight: .semibold, design: .rounded))
                             .foregroundStyle(info.isOpen ? AnyShapeStyle(.tint)
                                                          : AnyShapeStyle(.primary))
+                            .opacity(info.isGhost ? 0.5 : 1)
                     }
                     .overlay(alignment: .bottomTrailing) {
                         if info.isMain {
@@ -90,11 +104,15 @@ struct LaneCircle: View {
                     .frame(maxWidth: 64)
                     .foregroundStyle(info.isOpen ? AnyShapeStyle(.tint)
                                                  : AnyShapeStyle(.secondary))
+                    .opacity(info.isGhost ? 0.6 : 1)
             }
         }
         .buttonStyle(.plain)
         .contextMenu {
-            if info.isMain {
+            // A ghost can't lead the audio — no main toggle on the dead.
+            if info.isGhost {
+                EmptyView()
+            } else if info.isMain {
                 Button("Clear main orchestrator") { setMain(false) }
             } else {
                 Button("Set as main orchestrator") { setMain(true) }
@@ -122,7 +140,11 @@ struct LaneCircle: View {
 
     private var helpText: String {
         var bits: [String] = [info.displayName]
-        if let s = info.state { bits.append(s) }
+        if info.isGhost {
+            bits.append("closed — history only")
+        } else if let s = info.state {
+            bits.append(s)
+        }
         if info.unplayed > 0 { bits.append("\(info.unplayed) unheard") }
         if info.isMain { bits.append("main orchestrator") }
         return bits.joined(separator: " · ")

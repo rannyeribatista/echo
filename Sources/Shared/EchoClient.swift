@@ -348,6 +348,12 @@ final class EchoClient: ObservableObject {
         UserDefaults.standard.set(lane, forKey: "openLane")
     }
 
+    /// Bring a message into the pane without playing it — the pager's
+    /// selection when a page switch lands on a message.
+    func select(_ clip: Clip) {
+        openClip = clips.first(where: { $0.id == clip.id }) ?? clip
+    }
+
     /// Promote (or clear) the main orchestrator. Routing is the app's; the
     /// coordinator ROLE stays the owner file's (One Echo A5: the files remain
     /// the sessions' interchange) — on the Mac we sync it when the lane's

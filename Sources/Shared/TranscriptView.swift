@@ -3,173 +3,365 @@ import SwiftUI
 import AppKit
 #endif
 
-/// The transcript — the window's content area since the cockpit drive
-/// (2026-08-21, Ranny's spec): the open lane's messages as one chat-style
-/// scroll, oldest at the top, the current message living at the bottom.
-/// Message text is 17pt, centered, unboxed; separators carry the time; the
-/// transport lives in a fixed bar above (TransportBar). Tap a paragraph to
-/// play from it; the sounding paragraph leads, everything else fades.
+/// The message pager — the window's content area, fourth pass of the cockpit
+/// drive (2026-08-21, Ranny's redesign after three snap attempts died on
+/// macOS's scroll internals — modern SwiftUI ScrollView isn't even
+/// NSScrollView-backed, so there was never a signal to intercept).
 ///
-/// MAGNETIC EDGES, third pass. Pass 1 (ScrollTargetBehavior) and pass 2
-/// (GeometryReader offset preference) both died the same death: on macOS the
-/// AppKit scroll bridge neither consults SwiftUI's target behaviors nor
-/// re-evaluates geometry during a native trackpad scroll — no signal, no
-/// snap (Ranny's two drive reports). The signal now comes from AppKit
-/// itself: an embedded NSView finds its enclosing NSScrollView and observes
-/// the clip view's boundsDidChange — the ground truth of scrolling on macOS.
-/// A settle timer on the default runloop mode fires only after the gesture
-/// ends; if the viewport bottom rests within `snapRadius` of a message's
-/// bottom edge, a spring pops it there (bottom-aligned, the reading
-/// position). Long messages scroll free inside; crossing an edge takes a
-/// deliberate push. Tunables: snapRadius + snapSpring. iOS: plain scroll for
-/// now — the phone pass picks its own mechanism at deploy time.
+/// The shape now: ONE message fills the whole text area. Small text sits
+/// vertically centered with calm space around it; text taller than the box
+/// scrolls within it, clamped at its own top and bottom. Pushing past an edge
+/// is the page switch — an elastic pull (needle into the cell: resistance
+/// first, then the pop) that slides the neighboring message in. Scrolling is
+/// driven entirely by our own physics: an NSEvent local monitor takes the raw
+/// scroll-wheel stream over the pager (nothing for AppKit to hide), applies
+/// deltas to the inner offset, turns edge overflow into a rubber-banded pull,
+/// and fires the switch past the threshold. Gesture deltas count toward the
+/// pull; momentum only scrolls the inner text — crossing a message edge takes
+/// a deliberate push. Tunables: threshold · rubber curve · the two springs.
+///
+/// iOS: the same page layout with a native inner ScrollView and no edge
+/// gesture yet — the phone pass picks its own mechanism at deploy time.
 
-/// Content-space bottom edge of every message, keyed by clip id. Measured at
-/// layout time (which macOS does honor), consumed at scroll-settle time.
-private struct MessageBottomsKey: PreferenceKey {
-    static var defaultValue: [UUID: CGFloat] = [:]
-    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
-        value.merge(nextValue()) { $1 }
+// MARK: - Measurements
+
+private struct TextHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private struct BoxHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
     }
 }
 
 #if os(macOS)
-/// Invisible resident of the scroll content: reports (offset, viewportH,
-/// contentH) whenever a native scroll settles.
-private struct ScrollSettleWatcher: NSViewRepresentable {
-    let onSettle: (_ offset: CGFloat, _ viewportH: CGFloat, _ contentH: CGFloat) -> Void
 
-    func makeNSView(context: Context) -> WatcherView {
-        let v = WatcherView()
-        v.onSettle = onSettle
-        return v
-    }
+// MARK: - The physics engine (macOS)
 
-    func updateNSView(_ nsView: WatcherView, context: Context) {
-        nsView.onSettle = onSettle
-    }
+/// Owns the scroll-wheel monitor and the pull/offset state for the active
+/// page. All mutation happens on the main thread (NSEvent monitors run there).
+final class PagerEngine: ObservableObject {
+    /// Scroll distance from the top of the overflowing text (0…maxOffset).
+    @Published var innerOffset: CGFloat = 0
+    /// Elastic display offset while pulling past an edge (+ = pulled at top).
+    @Published var rubber: CGFloat = 0
 
-    final class WatcherView: NSView {
-        var onSettle: ((CGFloat, CGFloat, CGFloat) -> Void)?
-        private var observer: NSObjectProtocol?
-        private var settleTimer: Timer?
+    var textH: CGFloat = 0
+    var boxH: CGFloat = 0
+    /// Called with -1 (page above / older) or +1 (below / newer).
+    /// Returns whether a switch actually happened (false at the ends).
+    var onSwitch: ((Int) -> Bool)?
+    /// Hit test: does this event belong to the pager's screen area?
+    var hitTest: ((NSEvent) -> Bool)?
 
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            guard observer == nil, let clip = enclosingScrollView?.contentView else { return }
-            clip.postsBoundsChangedNotifications = true
-            observer = NotificationCenter.default.addObserver(
-                forName: NSView.boundsDidChangeNotification, object: clip, queue: .main
-            ) { [weak self] _ in self?.scrolled() }
+    /// Raw accumulated pull past an edge (signed; + = top).
+    private var pull: CGFloat = 0
+    /// Swallow leftovers (rest of gesture + momentum) after a switch fires.
+    private var cooling = false
+    private var pendingLandAtBottom = false
+    private var justPrepared = false
+    private var decay: DispatchWorkItem?
+    private var monitor: Any?
+
+    static let threshold: CGFloat = 150
+    static let switchSpring: Animation = .spring(response: 0.42, dampingFraction: 0.85)
+    static let releaseSpring: Animation = .spring(response: 0.3, dampingFraction: 0.8)
+
+    func install() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] e in
+            self?.handle(e) ?? e
         }
+    }
 
-        private func scrolled() {
-            settleTimer?.invalidate()
-            // Default runloop mode on purpose: while the trackpad gesture is
-            // live the runloop sits in event-tracking mode and this timer
-            // waits — so "fired" genuinely means "the hand let go".
-            settleTimer = Timer.scheduledTimer(withTimeInterval: 0.18, repeats: false) { [weak self] _ in
-                self?.settled()
+    func remove() {
+        if let m = monitor { NSEvent.removeMonitor(m) }
+        monitor = nil
+    }
+
+    deinit { remove() }
+
+    /// The view is about to switch to another page (engine-initiated).
+    func prepareForNewPage(landAtBottom: Bool) {
+        pull = 0
+        rubber = 0
+        innerOffset = 0
+        textH = 0                       // stale until the new page measures
+        pendingLandAtBottom = landAtBottom
+        justPrepared = true
+    }
+
+    /// The page changed under us (auto-play advance, lane switch, arrival).
+    func pageDidChange() {
+        if justPrepared { justPrepared = false; return }
+        pull = 0
+        rubber = 0
+        innerOffset = 0
+        textH = 0
+        pendingLandAtBottom = false
+        cooling = false
+    }
+
+    /// New page's text measured — land where the entry direction wants us.
+    func textMeasured(_ h: CGFloat) {
+        textH = h
+        if pendingLandAtBottom {
+            pendingLandAtBottom = false
+            innerOffset = max(h - boxH, 0)
+        } else {
+            innerOffset = min(innerOffset, max(h - boxH, 0))
+        }
+    }
+
+    private func handle(_ e: NSEvent) -> NSEvent? {
+        guard hitTest?(e) == true else { return e }
+        let inGesture = e.phase.rawValue != 0
+        if e.phase.contains(.began) { cooling = false }
+        if cooling { return nil }
+
+        let dy = e.hasPreciseScrollingDeltas ? e.scrollingDeltaY
+                                             : e.scrollingDeltaY * 12
+        let maxOff = max(textH - boxH, 0)
+        let target = innerOffset - dy       // dy > 0 = scrolling up (earlier)
+
+        if target >= 0 && target <= maxOff {
+            innerOffset = target
+            if pull != 0 { springBack() }
+        } else if target < 0 {
+            // Pushing past the top — toward the message above (older).
+            innerOffset = 0
+            if inGesture {
+                pull += -target
+                rubber = Self.curve(pull)
+                armDecay()
+                if pull >= Self.threshold { attemptSwitch(-1) }
+            }
+        } else {
+            // Pushing past the bottom — toward the message below (newer).
+            innerOffset = maxOff
+            if inGesture {
+                pull -= target - maxOff
+                rubber = Self.curve(pull)
+                armDecay()
+                if -pull >= Self.threshold { attemptSwitch(+1) }
             }
         }
 
-        private func settled() {
-            guard let scroll = enclosingScrollView, let doc = scroll.documentView else { return }
-            let clip = scroll.contentView
-            onSettle?(clip.bounds.origin.y, clip.bounds.height, doc.frame.height)
+        if e.phase.contains(.ended) || e.phase.contains(.cancelled) {
+            if abs(pull) < Self.threshold, pull != 0 { springBack() }
         }
+        return nil                          // the pager owns this wheel
+    }
 
-        deinit {
-            if let o = observer { NotificationCenter.default.removeObserver(o) }
-            settleTimer?.invalidate()
+    private func attemptSwitch(_ dir: Int) {
+        if onSwitch?(dir) == true {
+            cooling = true                  // eat the rest of this gesture
+        } else {
+            springBack()                    // no page there — just the bounce
         }
     }
+
+    private func springBack() {
+        pull = 0
+        withAnimation(Self.releaseSpring) { rubber = 0 }
+    }
+
+    private func armDecay() {
+        decay?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.pull != 0, !self.cooling else { return }
+            self.springBack()
+        }
+        decay = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    /// Asymptotic elastic display: early pixels move, later ones resist.
+    private static func curve(_ p: CGFloat) -> CGFloat {
+        let sign: CGFloat = p >= 0 ? 1 : -1
+        let a = abs(p)
+        return sign * 90 * a / (a + 140)
+    }
+}
+
+/// Invisible AppKit resident giving the engine a real hit test (converts the
+/// event's window coordinates into our bounds, flipping handled by AppKit).
+private struct PagerHitView: NSViewRepresentable {
+    let engine: PagerEngine
+
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        engine.hitTest = { [weak v] e in
+            guard let v, let w = v.window, e.window === w else { return false }
+            return v.bounds.contains(v.convert(e.locationInWindow, from: nil))
+        }
+        return v
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
 #endif
+
+// MARK: - The pager
 
 struct TranscriptView: View {
     @ObservedObject var client: EchoClient
     /// The open lane's history, newest-first as EchoClient keeps it.
     let clips: [Clip]
 
-    @State private var bottoms: [UUID: CGFloat] = [:]
-
-    private static let bottomAnchor = "transcript-bottom"
-    /// How sticky a message edge is (pt): settle inside this radius and the
-    /// scroll pops to the boundary; beyond it, it stays where you left it.
-    private static let snapRadius: CGFloat = 90
-    private static let snapSpring: Animation = .spring(response: 0.35, dampingFraction: 0.78)
+    #if os(macOS)
+    @StateObject private var engine = PagerEngine()
+    #endif
+    /// nil = ride the newest message; set once the user navigates away.
+    @State private var pageId: UUID?
+    /// Direction of the last switch, for the slide transition.
+    @State private var lastDir: Int = 1
 
     private var ordered: [Clip] { clips.reversed() }
-    private var newestId: UUID? { clips.first?.id }
+    private var current: Clip? {
+        if let pageId, let c = ordered.first(where: { $0.id == pageId }) { return c }
+        return ordered.last
+    }
+    private var currentIndex: Int {
+        guard let cur = current else { return 0 }
+        return ordered.firstIndex(where: { $0.id == cur.id }) ?? ordered.count - 1
+    }
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .center, spacing: 0) {
-                    VStack(alignment: .center, spacing: 30) {
-                        ForEach(ordered) { clip in
-                            MessageBlock(client: client, clip: clip)
-                                .id(clip.id)
-                                .background(GeometryReader { g in
-                                    Color.clear.preference(
-                                        key: MessageBottomsKey.self,
-                                        value: [clip.id: g.frame(in: .named("transcriptContent")).maxY])
-                                })
-                        }
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.top, 6)
-                    // Breathing room over the window edge + a true bottom
-                    // anchor so "scrolled to the end" shows the last line.
-                    Color.clear.frame(height: 20)
-                        .id(Self.bottomAnchor)
-                }
-                .coordinateSpace(name: "transcriptContent")
-                .background(settleWatcher(proxy))
+        ZStack {
+            if let clip = current {
+                page(for: clip)
+                    .id(clip.id)
+                    .transition(pageTransition)
             }
-            .onPreferenceChange(MessageBottomsKey.self) { bottoms = $0 }
-            .onAppear { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
-            .onChange(of: newestId) { _ in
-                withAnimation { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
-            }
-            .onChange(of: client.openLane) { _ in
-                proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
-            }
+        }
+        #if os(macOS)
+        .background(PagerHitView(engine: engine))
+        .onAppear {
+            engine.onSwitch = { dir in switchPage(dir) }
+            engine.install()
+        }
+        .onDisappear { engine.remove() }
+        #endif
+        .onChange(of: current?.id) { _ in
+            #if os(macOS)
+            engine.pageDidChange()
+            #endif
+        }
+        .onChange(of: client.openClip?.id) { newId in
+            // Follow selection made elsewhere (auto-play advance, taps).
+            guard let newId, newId != current?.id,
+                  let ni = ordered.firstIndex(where: { $0.id == newId }) else { return }
+            lastDir = ni >= currentIndex ? 1 : -1
+            withAnimation(springForSwitch) { pageId = newId }
+        }
+        .onChange(of: clips.first?.id) { _ in
+            if pageId == nil { lastDir = 1 }   // riding the newest: slide up
+        }
+        .onChange(of: client.openLane) { _ in
+            pageId = nil                        // fresh lane: its newest page
         }
     }
 
-    @ViewBuilder private func settleWatcher(_ proxy: ScrollViewProxy) -> some View {
+    private var springForSwitch: Animation {
         #if os(macOS)
-        ScrollSettleWatcher { offset, viewportH, contentH in
-            performSnap(offset: offset, viewportH: viewportH, contentH: contentH, proxy: proxy)
-        }
+        PagerEngine.switchSpring
         #else
-        Color.clear
+        .spring(response: 0.42, dampingFraction: 0.85)
         #endif
     }
 
-    private func performSnap(offset: CGFloat, viewportH: CGFloat, contentH: CGFloat,
-                             proxy: ScrollViewProxy) {
-        guard viewportH > 0, contentH > viewportH, !bottoms.isEmpty else { return }
-        let viewportBottom = offset + viewportH
-        guard let nearest = bottoms.min(by: {
-            abs($0.value - viewportBottom) < abs($1.value - viewportBottom)
-        }) else { return }
-        let distance = abs(nearest.value - viewportBottom)
-        if distance > 2, distance <= Self.snapRadius {
-            withAnimation(Self.snapSpring) {
-                proxy.scrollTo(nearest.key, anchor: .bottom)
+    private var pageTransition: AnyTransition {
+        lastDir < 0
+        ? .asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
+                      removal: .move(edge: .bottom).combined(with: .opacity))
+        : .asymmetric(insertion: .move(edge: .bottom).combined(with: .opacity),
+                      removal: .move(edge: .top).combined(with: .opacity))
+    }
+
+    /// -1 = the message above (older) · +1 = below (newer). Returns whether
+    /// there was a page to switch to.
+    private func switchPage(_ dir: Int) -> Bool {
+        let ni = currentIndex + dir
+        guard ordered.indices.contains(ni) else { return false }
+        let next = ordered[ni]
+        lastDir = dir
+        #if os(macOS)
+        // Entering from below lands at the bottom of the message above —
+        // the reading position; entering from above lands at its top.
+        engine.prepareForNewPage(landAtBottom: dir < 0)
+        #endif
+        withAnimation(springForSwitch) { pageId = next.id }
+        client.select(next)
+        return true
+    }
+
+    @ViewBuilder private func page(for clip: Clip) -> some View {
+        VStack(spacing: 8) {
+            pageHeader(clip)
+            GeometryReader { box in
+                MessageBlock(client: client, clip: clip)
+                    .frame(width: box.size.width)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(GeometryReader { g in
+                        Color.clear.preference(key: TextHeightKey.self, value: g.size.height)
+                    })
+                    .offset(y: pageOffset(boxHeight: box.size.height))
+                    .frame(width: box.size.width, height: box.size.height, alignment: .topLeading)
+                    .clipped()
+                    .contentShape(Rectangle())
+                    .preference(key: BoxHeightKey.self, value: box.size.height)
             }
+        }
+        .onPreferenceChange(TextHeightKey.self) { h in
+            #if os(macOS)
+            engine.textMeasured(h)
+            #endif
+        }
+        .onPreferenceChange(BoxHeightKey.self) { h in
+            #if os(macOS)
+            engine.boxH = h
+            #endif
+        }
+    }
+
+    private func pageOffset(boxHeight: CGFloat) -> CGFloat {
+        #if os(macOS)
+        let textH = engine.textH
+        if textH > 0, textH <= boxHeight {
+            return (boxHeight - textH) / 2 + engine.rubber   // centered, calm
+        }
+        return -engine.innerOffset + engine.rubber
+        #else
+        return 0
+        #endif
+    }
+
+    private func pageHeader(_ clip: Clip) -> some View {
+        HStack(spacing: 8) {
+            Rectangle().fill(.quaternary).frame(height: 1)
+            if clip.playedAt == nil { PulsingDot() }
+            Text(clip.displayedAt, style: .time)
+                .font(.caption).foregroundStyle(.secondary)
+            Text("\(currentIndex + 1)/\(ordered.count)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Rectangle().fill(.quaternary).frame(height: 1)
         }
     }
 }
 
-/// One message in the transcript: a time separator, then the full text at
-/// reading size, centered. Fade rules (Ranny's spec, 08-21): unselected
-/// messages wear the played-row fade; the selected message reads strong; and
-/// the moment a paragraph sounds, its siblings drop to the unselected fade so
-/// the sounding one carries the eye.
+// MARK: - One message's text
+
+/// The full text of one message at reading size, centered. Fade rules
+/// (Ranny's spec): the page is the selected message and reads strong; while
+/// audio plays only the sounding paragraph stays strong. Tap a paragraph to
+/// play from it.
 private struct MessageBlock: View {
     @ObservedObject var client: EchoClient
     let clip: Clip
@@ -177,12 +369,18 @@ private struct MessageBlock: View {
     private static let textSize: CGFloat = 17
     private let faded: Double = 0.4
 
-    private var isSelected: Bool { client.openClip?.id == clip.id }
     private var isLive: Bool { client.nowPlayingClip?.id == clip.id }
 
     var body: some View {
+        #if os(macOS)
+        content
+        #else
+        ScrollView { content }
+        #endif
+    }
+
+    private var content: some View {
         VStack(alignment: .center, spacing: 12) {
-            separator
             if let chunks = clip.chunks {
                 ForEach(chunks, id: \.seq) { chunk in
                     Text(chunk.text)
@@ -198,32 +396,25 @@ private struct MessageBlock: View {
                 Text(clip.text)
                     .font(.system(size: Self.textSize))
                     .multilineTextAlignment(.center)
-                    .opacity(isSelected || isLive ? 1 : faded)
+                    .opacity(1)
                     .frame(maxWidth: .infinity, alignment: .center)
                     .contentShape(Rectangle())
                     .onTapGesture { client.play(clip) }
             }
         }
+        .padding(.horizontal, 6)
     }
 
     private func paragraphOpacity(_ seq: Int) -> Double {
         if isLive { return seq == client.currentChunk ? 1 : faded }
-        return isSelected ? 1 : faded
-    }
-
-    private var separator: some View {
-        HStack(spacing: 8) {
-            Rectangle().fill(.quaternary).frame(height: 1)
-            if clip.playedAt == nil { PulsingDot() }
-            Text(clip.displayedAt, style: .time)
-                .font(.caption).foregroundStyle(.secondary)
-            Rectangle().fill(.quaternary).frame(height: 1)
-        }
+        return 1
     }
 }
 
-/// The fixed transport bar above the transcript — everything the active card
-/// used to carry: live controls (restart · pause · stop · Continue/Rendering/
+// MARK: - Transport
+
+/// The fixed transport bar above the pager — everything the active card used
+/// to carry: live controls (restart · pause · stop · Continue/Rendering/
 /// scrubber) with the chunk counter, or a replay affordance when idle.
 struct TransportBar: View {
     @ObservedObject var client: EchoClient

@@ -25,10 +25,13 @@ import AppKit
 
 // MARK: - Measurements
 
+/// Text heights keyed by message id — during a page-switch animation BOTH
+/// pages are alive and reporting; a single scalar got clobbered by whichever
+/// landed last (the wrong-message/centering bug of the first pager build).
 private struct TextHeightKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = max(value, nextValue())
+    static var defaultValue: [UUID: CGFloat] = [:]
+    static func reduce(value: inout [UUID: CGFloat], nextValue: () -> [UUID: CGFloat]) {
+        value.merge(nextValue()) { max($0, $1) }
     }
 }
 
@@ -51,7 +54,12 @@ final class PagerEngine: ObservableObject {
     /// Elastic display offset while pulling past an edge (+ = pulled at top).
     @Published var rubber: CGFloat = 0
 
-    var textH: CGFloat = 0
+    /// Measured text heights per message — kept across visits so returning to
+    /// a page lands correctly before its next layout pass.
+    @Published private(set) var heights: [UUID: CGFloat] = [:]
+    /// The page the physics currently applies to.
+    var currentId: UUID?
+    var textH: CGFloat { currentId.flatMap { heights[$0] } ?? 0 }
     var boxH: CGFloat = 0
     /// Called with -1 (page above / older) or +1 (below / newer).
     /// Returns whether a switch actually happened (false at the ends).
@@ -91,25 +99,36 @@ final class PagerEngine: ObservableObject {
         pull = 0
         rubber = 0
         innerOffset = 0
-        textH = 0                       // stale until the new page measures
         pendingLandAtBottom = landAtBottom
         justPrepared = true
     }
 
-    /// The page changed under us (auto-play advance, lane switch, arrival).
-    func pageDidChange() {
-        if justPrepared { justPrepared = false; return }
-        pull = 0
-        rubber = 0
-        innerOffset = 0
-        textH = 0
-        pendingLandAtBottom = false
-        cooling = false
+    /// The current page changed — engine-initiated (justPrepared) or from the
+    /// outside (auto-play advance, lane switch, arrival). Either way the
+    /// physics now applies to `id`; if we already know its height (a page
+    /// revisited), the landing applies immediately.
+    func pageDidChange(to id: UUID?) {
+        currentId = id
+        if justPrepared {
+            justPrepared = false
+        } else {
+            pull = 0
+            rubber = 0
+            innerOffset = 0
+            pendingLandAtBottom = false
+            cooling = false
+        }
+        if let id, let h = heights[id] { applyLanding(h) }
     }
 
-    /// New page's text measured — land where the entry direction wants us.
-    func textMeasured(_ h: CGFloat) {
-        textH = h
+    /// A page's text measured (either of the two alive during a transition —
+    /// only the current one moves the physics).
+    func textMeasured(id: UUID, _ h: CGFloat) {
+        heights[id] = h
+        if id == currentId { applyLanding(h) }
+    }
+
+    private func applyLanding(_ h: CGFloat) {
         if pendingLandAtBottom {
             pendingLandAtBottom = false
             innerOffset = max(h - boxH, 0)
@@ -240,17 +259,35 @@ struct TranscriptView: View {
                     .transition(pageTransition)
             }
         }
+        .overlay(alignment: .bottomTrailing) {
+            // The way home: visible whenever we're off the newest message.
+            if let last = ordered.last, current?.id != last.id {
+                Button { jumpToNewest() } label: {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 28))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.tint)
+                }
+                .buttonStyle(.plain)
+                .padding(12)
+                .help("Back to the latest message")
+            }
+        }
         #if os(macOS)
         .background(PagerHitView(engine: engine))
         .onAppear {
             engine.onSwitch = { dir in switchPage(dir) }
+            engine.currentId = current?.id
             engine.install()
         }
         .onDisappear { engine.remove() }
+        .onPreferenceChange(TextHeightKey.self) { measured in
+            for (id, h) in measured { engine.textMeasured(id: id, h) }
+        }
         #endif
-        .onChange(of: current?.id) { _ in
+        .onChange(of: current?.id) { id in
             #if os(macOS)
-            engine.pageDidChange()
+            engine.pageDidChange(to: id)
             #endif
         }
         .onChange(of: client.openClip?.id) { newId in
@@ -301,6 +338,19 @@ struct TranscriptView: View {
         return true
     }
 
+    /// The floating button: back to the newest message, landing at its bottom
+    /// (the latest words). pageId returns to nil so the pager rides new
+    /// arrivals again.
+    private func jumpToNewest() {
+        guard let last = ordered.last, current?.id != last.id else { return }
+        lastDir = 1
+        #if os(macOS)
+        engine.prepareForNewPage(landAtBottom: true)
+        #endif
+        withAnimation(springForSwitch) { pageId = nil }
+        client.select(last)
+    }
+
     @ViewBuilder private func page(for clip: Clip) -> some View {
         VStack(spacing: 8) {
             pageHeader(clip)
@@ -309,19 +359,15 @@ struct TranscriptView: View {
                     .frame(width: box.size.width)
                     .fixedSize(horizontal: false, vertical: true)
                     .background(GeometryReader { g in
-                        Color.clear.preference(key: TextHeightKey.self, value: g.size.height)
+                        Color.clear.preference(key: TextHeightKey.self,
+                                               value: [clip.id: g.size.height])
                     })
-                    .offset(y: pageOffset(boxHeight: box.size.height))
+                    .offset(y: pageOffset(for: clip, boxHeight: box.size.height))
                     .frame(width: box.size.width, height: box.size.height, alignment: .topLeading)
                     .clipped()
                     .contentShape(Rectangle())
                     .preference(key: BoxHeightKey.self, value: box.size.height)
             }
-        }
-        .onPreferenceChange(TextHeightKey.self) { h in
-            #if os(macOS)
-            engine.textMeasured(h)
-            #endif
         }
         .onPreferenceChange(BoxHeightKey.self) { h in
             #if os(macOS)
@@ -330,13 +376,17 @@ struct TranscriptView: View {
         }
     }
 
-    private func pageOffset(boxHeight: CGFloat) -> CGFloat {
+    /// Each alive page (two, mid-transition) positions by its OWN measured
+    /// height; only the current page carries the live physics offsets.
+    private func pageOffset(for clip: Clip, boxHeight: CGFloat) -> CGFloat {
         #if os(macOS)
-        let textH = engine.textH
+        let isCurrent = clip.id == engine.currentId
+        let textH = engine.heights[clip.id] ?? 0
+        let rubber = isCurrent ? engine.rubber : 0
         if textH > 0, textH <= boxHeight {
-            return (boxHeight - textH) / 2 + engine.rubber   // centered, calm
+            return (boxHeight - textH) / 2 + rubber          // centered, calm
         }
-        return -engine.innerOffset + engine.rubber
+        return (isCurrent ? -engine.innerOffset : 0) + rubber
         #else
         return 0
         #endif
@@ -402,7 +452,10 @@ private struct MessageBlock: View {
                     .onTapGesture { client.play(clip) }
             }
         }
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 12)
+        // Breathing room at both ends — inside the measured height, so a tall
+        // message's scroll range includes it and small text stays centered.
+        .padding(.vertical, 28)
     }
 
     private func paragraphOpacity(_ seq: Int) -> Double {

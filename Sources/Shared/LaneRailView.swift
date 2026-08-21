@@ -205,34 +205,46 @@ struct LaneCircle: View {
                                with: .color(pal.dark.opacity(0.35 * env)), lineWidth: 1.2)
                 }
                 // Micro-photons: many, tiny, light-emitting, intermittent.
+                // (Arithmetic kept in explicit Double steps — one fused
+                // expression here sent the type-checker into the weeds.)
                 let prismA = Color(hue: 0.55, saturation: 0.85, brightness: 1)
                 let prismB = Color(hue: 0.83, saturation: 0.75, brightness: 1)
+                let RR = Double(R)
+                let cx = Double(c.x)
+                let cy = Double(c.y)
                 for i in 0..<22 {
                     let fi = Double(i)
-                    let sp = 0.25 + 0.11 * fi.truncatingRemainder(dividingBy: 4)
-                    let ang = phase * sp + seed + fi * 0.9
-                    let rr = R * (0.12 + 0.62 * (0.5 + 0.5 * sin(phase * (0.4 + 0.07 * fi) + fi * 2.1 + seed)))
+                    let sp: Double = 0.25 + 0.11 * fi.truncatingRemainder(dividingBy: 4)
+                    let ang: Double = phase * sp + seed + fi * 0.9
+                    let breath: Double = sin(phase * (0.4 + 0.07 * fi) + fi * 2.1 + seed)
+                    let rr: Double = RR * (0.12 + 0.62 * (0.5 + 0.5 * breath))
                     // Twinkle envelope: each photon has its own show/hide cycle.
-                    let tw = pow(max(0, sin(phase * (0.7 + 0.13 * fi) + fi * 1.3 + seed * 3)), 3)
+                    let twRaw: Double = sin(phase * (0.7 + 0.13 * fi) + fi * 1.3 + seed * 3)
+                    let tw: Double = pow(max(0, twRaw), 3)
                     guard tw > 0.03 else { continue }
-                    let pt = CGPoint(x: c.x + CGFloat(cos(ang) * rr),
-                                     y: c.y + CGFloat(sin(ang) * rr))
+                    let px: Double = cx + cos(ang) * rr
+                    let py: Double = cy + sin(ang) * rr
+                    let pt = CGPoint(x: px, y: py)
                     // Prismatic halo: white heart refracting into spectral
                     // cyan/magenta before it fades — the refraction effect.
-                    let halo = 1.5 + 3.5 * tw
-                    ctx.fill(Path(ellipseIn: CGRect(x: pt.x - halo, y: pt.y - halo,
-                                                    width: halo * 2, height: halo * 2)),
-                             with: .radialGradient(
-                                Gradient(stops: [
-                                    .init(color: .white.opacity(0.50 * tw), location: 0),
-                                    .init(color: prismA.opacity(0.26 * tw), location: 0.45),
-                                    .init(color: prismB.opacity(0.16 * tw), location: 0.75),
-                                    .init(color: .clear, location: 1)]),
-                                center: pt, startRadius: 0, endRadius: halo))
-                    let d = 0.8 + 0.8 * tw
-                    ctx.fill(Path(ellipseIn: CGRect(x: pt.x - d / 2, y: pt.y - d / 2,
-                                                    width: d, height: d)),
-                             with: .color(.white.opacity(0.85 * tw)))
+                    let halo: Double = 1.5 + 3.5 * tw
+                    let haloRect = CGRect(x: px - halo, y: py - halo,
+                                          width: halo * 2, height: halo * 2)
+                    let stops: [Gradient.Stop] = [
+                        .init(color: Color.white.opacity(0.50 * tw), location: 0),
+                        .init(color: prismA.opacity(0.26 * tw), location: 0.45),
+                        .init(color: prismB.opacity(0.16 * tw), location: 0.75),
+                        .init(color: Color.clear, location: 1)
+                    ]
+                    ctx.fill(Path(ellipseIn: haloRect),
+                             with: .radialGradient(Gradient(stops: stops),
+                                                   center: pt, startRadius: 0,
+                                                   endRadius: halo))
+                    let d: Double = 0.8 + 0.8 * tw
+                    let coreRect = CGRect(x: px - d / 2, y: py - d / 2,
+                                          width: d, height: d)
+                    ctx.fill(Path(ellipseIn: coreRect),
+                             with: .color(Color.white.opacity(0.85 * tw)))
                 }
             }
         }

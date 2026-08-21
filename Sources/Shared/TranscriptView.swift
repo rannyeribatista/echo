@@ -42,6 +42,15 @@ private struct BoxHeightKey: PreferenceKey {
     }
 }
 
+/// Each paragraph's top edge within its message's content, per message —
+/// what lets a page-return land ON the sounding paragraph instead of the top.
+private struct ChunkFramesKey: PreferenceKey {
+    static var defaultValue: [UUID: [Int: CGFloat]] = [:]
+    static func reduce(value: inout [UUID: [Int: CGFloat]], nextValue: () -> [UUID: [Int: CGFloat]]) {
+        value.merge(nextValue()) { a, b in a.merging(b) { $1 } }
+    }
+}
+
 #if os(macOS)
 
 // MARK: - The physics engine (macOS)
@@ -72,6 +81,9 @@ final class PagerEngine: ObservableObject {
     /// Swallow leftovers (rest of gesture + momentum) after a switch fires.
     private var cooling = false
     private var pendingLandAtBottom = false
+    /// A specific landing offset (e.g., the sounding paragraph) — wins over
+    /// landAtBottom when set.
+    private var pendingLandOffset: CGFloat?
     private var justPrepared = false
     private var decay: DispatchWorkItem?
     private var monitor: Any?
@@ -100,6 +112,18 @@ final class PagerEngine: ObservableObject {
         rubber = 0
         innerOffset = 0
         pendingLandAtBottom = landAtBottom
+        pendingLandOffset = nil
+        justPrepared = true
+    }
+
+    /// Switch that should land at a specific content offset — the page-return
+    /// to a live message lands on its sounding paragraph.
+    func prepareForNewPage(landAtOffset offset: CGFloat) {
+        pull = 0
+        rubber = 0
+        innerOffset = 0
+        pendingLandAtBottom = false
+        pendingLandOffset = offset
         justPrepared = true
     }
 
@@ -116,6 +140,7 @@ final class PagerEngine: ObservableObject {
             rubber = 0
             innerOffset = 0
             pendingLandAtBottom = false
+            pendingLandOffset = nil
             cooling = false
         }
         if let id, let h = heights[id] { applyLanding(h) }
@@ -129,11 +154,16 @@ final class PagerEngine: ObservableObject {
     }
 
     private func applyLanding(_ h: CGFloat) {
-        if pendingLandAtBottom {
+        let maxOff = max(h - boxH, 0)
+        if let off = pendingLandOffset {
+            pendingLandOffset = nil
             pendingLandAtBottom = false
-            innerOffset = max(h - boxH, 0)
+            innerOffset = min(max(off, 0), maxOff)
+        } else if pendingLandAtBottom {
+            pendingLandAtBottom = false
+            innerOffset = maxOff
         } else {
-            innerOffset = min(innerOffset, max(h - boxH, 0))
+            innerOffset = min(innerOffset, maxOff)
         }
     }
 
@@ -240,6 +270,8 @@ struct TranscriptView: View {
     @State private var pageId: UUID?
     /// Direction of the last switch, for the slide transition.
     @State private var lastDir: Int = 1
+    /// Paragraph top-edges per message (measured), for sounding-paragraph landings.
+    @State private var chunkFrames: [UUID: [Int: CGFloat]] = [:]
 
     private var ordered: [Clip] { clips.reversed() }
     private var current: Clip? {
@@ -285,6 +317,7 @@ struct TranscriptView: View {
             for (id, h) in measured { engine.textMeasured(id: id, h) }
         }
         #endif
+        .onPreferenceChange(ChunkFramesKey.self) { chunkFrames.merge($0) { $1 } }
         .onChange(of: current?.id) { id in
             #if os(macOS)
             engine.pageDidChange(to: id)
@@ -295,6 +328,7 @@ struct TranscriptView: View {
             guard let newId, newId != current?.id,
                   let ni = ordered.firstIndex(where: { $0.id == newId }) else { return }
             lastDir = ni >= currentIndex ? 1 : -1
+            prepareLanding(for: ordered[ni], dir: lastDir)
             withAnimation(springForSwitch) { pageId = newId }
         }
         .onChange(of: clips.first?.id) { _ in
@@ -328,14 +362,25 @@ struct TranscriptView: View {
         guard ordered.indices.contains(ni) else { return false }
         let next = ordered[ni]
         lastDir = dir
-        #if os(macOS)
-        // Entering from below lands at the bottom of the message above —
-        // the reading position; entering from above lands at its top.
-        engine.prepareForNewPage(landAtBottom: dir < 0)
-        #endif
+        prepareLanding(for: next, dir: dir)
         withAnimation(springForSwitch) { pageId = next.id }
         client.select(next)
         return true
+    }
+
+    /// Where a page switch lands. A LIVE message wins: land on its sounding
+    /// paragraph so the highlight picks right back up (Ranny, 08-21).
+    /// Otherwise: entering from below lands at the bottom of the message
+    /// above (the reading position); entering from above lands at its top.
+    private func prepareLanding(for clip: Clip, dir: Int) {
+        #if os(macOS)
+        if clip.id == client.nowPlayingClip?.id,
+           let y = chunkFrames[clip.id]?[client.currentChunk] {
+            engine.prepareForNewPage(landAtOffset: max(y - 80, 0))
+        } else {
+            engine.prepareForNewPage(landAtBottom: dir < 0)
+        }
+        #endif
     }
 
     /// The floating button: back to the newest message, landing at its bottom
@@ -344,9 +389,15 @@ struct TranscriptView: View {
     private func jumpToNewest() {
         guard let last = ordered.last, current?.id != last.id else { return }
         lastDir = 1
-        #if os(macOS)
-        engine.prepareForNewPage(landAtBottom: true)
-        #endif
+        // A live newest lands on its sounding paragraph; otherwise at its
+        // latest words.
+        if last.id == client.nowPlayingClip?.id {
+            prepareLanding(for: last, dir: 1)
+        } else {
+            #if os(macOS)
+            engine.prepareForNewPage(landAtBottom: true)
+            #endif
+        }
         withAnimation(springForSwitch) { pageId = nil }
         client.select(last)
     }
@@ -441,6 +492,11 @@ private struct MessageBlock: View {
                         .frame(maxWidth: .infinity, alignment: .center)
                         .contentShape(Rectangle())
                         .onTapGesture { client.jump(to: chunk.seq, in: clip) }
+                        .background(GeometryReader { g in
+                            Color.clear.preference(
+                                key: ChunkFramesKey.self,
+                                value: [clip.id: [chunk.seq: g.frame(in: .named("msgContent")).minY]])
+                        })
                 }
             } else {
                 Text(clip.text)
@@ -456,6 +512,9 @@ private struct MessageBlock: View {
         // Breathing room at both ends — inside the measured height, so a tall
         // message's scroll range includes it and small text stays centered.
         .padding(.vertical, 28)
+        // Paragraph positions measure against this space — the same padded
+        // block whose height TextHeightKey reports, so offsets line up.
+        .coordinateSpace(name: "msgContent")
     }
 
     private func paragraphOpacity(_ seq: Int) -> Double {

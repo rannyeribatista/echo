@@ -330,7 +330,11 @@ final class EchoClient: ObservableObject {
             openClip = newest
         }
         guard autoPlay else { return }
-        let backlog = clips.filter { $0.lane == lane && $0.playedAt == nil }.reversed()
+        // The sounding message is still unplayed — exclude it, or the lane's
+        // backlog queues a replay of it behind itself.
+        let backlog = clips.filter {
+            $0.lane == lane && $0.playedAt == nil && $0.id != nowPlayingClip?.id
+        }.reversed()
         guard !backlog.isEmpty else { return }
         if nowPlayingClip == nil {
             let rest = backlog.dropFirst()
@@ -880,6 +884,10 @@ final class EchoClient: ObservableObject {
     /// and history replays — a manual tap deliberately supersedes whatever is
     /// playing; automatic arrivals go through autoPlayArrived instead.
     func play(_ clip: Clip) {
+        // A direct play cancels any queued auto-play of the same message —
+        // otherwise its stale ticket replays it the moment it finishes
+        // (the double-reproduction bug, cockpit drive 08-21).
+        pendingAutoPlay.removeAll { $0 == clip.id }
         if clip.chunks != nil { startWalkie(clip) } else { playLegacy(clip) }
     }
 
@@ -922,6 +930,7 @@ final class EchoClient: ObservableObject {
     /// on, normal walkie flow resumes (gates, then Over at the end).
     func jump(to seq: Int, in clip: Clip) {
         guard let chunks = clip.chunks, seq >= 0, seq < chunks.count else { return }
+        pendingAutoPlay.removeAll { $0 == clip.id }   // same replay guard as play()
         playToken += 1
         isPlaying = true
         isPaused = false

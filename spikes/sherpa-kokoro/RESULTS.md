@@ -6,7 +6,20 @@ Mac is enough), model package `kokoro-multi-lang-v1_0` (fp32, 53 voices,
 sherpa layout: model.onnx + voices.bin + tokens.txt + espeak-ng-data +
 lexicons). `./fetch-vendor.sh` reproduces the setup.
 
-## Verdict: GO (engine) — voice parity pending Ranny's ear check
+## Verdict: GO (engine) — EN parity confirmed by ear; PT fixed, round-2 ear pending
+
+Ear check round 1 (2026-08-21, Ranny): **English perfect.** Portuguese "sounds
+like an American that learned to speak very poorly" — root cause found, not a
+model problem: the run omitted a language hint, and sherpa's kokoro package
+defaults to **en-us espeak phonemization** for all text. The python pipeline
+passes `lang="pt-br"`; sherpa's equivalent is `--kokoro-lang=pt-br` /
+`SherpaOnnxOfflineTtsKokoroModelConfig.lang` (verified in the shipped C API
+header + CLI help, which names pt-br explicitly). Re-rendered PT with
+`--kokoro-lang=pt-br`: 2.02s / 7.53s audio (RTF 0.27), delivered as ear-check
+round 2 (msg `1787281428882`). **Design note for P1:** `lang` is
+instance-level config, so language switching means either two warm engines
+(RSS cost TBD) or a ~2.4s reconfigure on switch — PT messages are the rarer
+case; decide with the warm-RSS measurement.
 
 Acceptance items from the brief:
 

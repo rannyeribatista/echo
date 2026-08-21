@@ -29,7 +29,9 @@ text shows at once, the first chunk plays within seconds of the text existing
 until you tap **Continue**, and a spoken *"Over"* marks the true end. A toggle
 restores continuous auto-play. No push, no cloud, no account — audio never
 leaves your devices. Full design in [`docs/architecture.md`](docs/architecture.md);
-the streaming protocol in [`docs/walkie-protocol.md`](docs/walkie-protocol.md).
+the streaming protocol in [`docs/walkie-protocol.md`](docs/walkie-protocol.md);
+where this is headed — the whole pipeline folded into the app — in
+[`docs/unification-design.md`](docs/unification-design.md).
 
 ## Build & run (reproducible)
 

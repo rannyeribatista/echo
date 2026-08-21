@@ -292,3 +292,14 @@ still missing collapses onto two primitives, both now in hand —
 ½ day · confirmations/mode/model each small once the base lands. Performance
 investigation (To-Do, 📅 08-25) should precede or ride along — the input surface
 deserves 60fps.
+
+**Ride-along adjustments (Ranny, 2026-08-21 night — ship with the input build):**
+- iPhone: the transport is claustrophobic in the narrow width — audio controls
+  (buttons + scrubber + Continue) move to a NEW ROW beneath the mode row;
+  the chunk counter ("n of m") stays far-left ON the mode row. Phone only;
+  the Mac keeps its single row.
+- Both platforms: MUTE is redundant with auto-play — remove the mute feature
+  entirely; the auto-play toggle adopts the speaker/mute iconography
+  (speaker.wave = auto-play on · speaker.slash = off) instead of the bolt.
+  Strip the `muted` gates from EchoClient (`isMuted`, the autoPlayArrived/
+  selectLane/playNextQueued guards) and the `muted` @AppStorage.

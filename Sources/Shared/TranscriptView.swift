@@ -477,8 +477,21 @@ private struct MessageBlock: View {
     @ObservedObject var client: EchoClient
     let clip: Clip
 
-    private static let textSize: CGFloat = 17
+    /// Reading typography (Settings → Reading): family + size are the
+    /// reader's choice; Apple SF is the default, serif faces on offer.
+    @AppStorage("messageFont") private var messageFontKey = "system"
+    @AppStorage("messageFontSize") private var messageFontSize = 17.0
     private let faded: Double = 0.4
+
+    private var messageFont: Font {
+        switch messageFontKey {
+        case "newyork": return .system(size: messageFontSize, design: .serif)
+        case "charter": return .custom("Charter", size: messageFontSize)
+        case "georgia": return .custom("Georgia", size: messageFontSize)
+        case "palatino": return .custom("Palatino", size: messageFontSize)
+        default: return .system(size: messageFontSize)
+        }
+    }
 
     private var isLive: Bool { client.nowPlayingClip?.id == clip.id }
 
@@ -495,7 +508,7 @@ private struct MessageBlock: View {
             if let chunks = clip.chunks {
                 ForEach(chunks, id: \.seq) { chunk in
                     Text(chunk.text)
-                        .font(.system(size: Self.textSize, design: .serif))
+                        .font(messageFont)
                         .lineSpacing(5)
                         .multilineTextAlignment(.center)
                         .strikethrough(chunk.failed)
@@ -511,7 +524,7 @@ private struct MessageBlock: View {
                 }
             } else {
                 Text(clip.text)
-                    .font(.system(size: Self.textSize, design: .serif))
+                    .font(messageFont)
                     .lineSpacing(5)
                     .multilineTextAlignment(.center)
                     .opacity(1)

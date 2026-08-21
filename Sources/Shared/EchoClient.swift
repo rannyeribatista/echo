@@ -131,6 +131,8 @@ final class EchoClient: ObservableObject {
     @Published var openClip: Clip?
     @Published var playbackTime: TimeInterval = 0
     @Published var playbackDuration: TimeInterval = 0
+    /// Live output level 0…1 while a clip sounds — the speaking orb's breath.
+    @Published var audioLevel: Double = 0
     /// Walkie playback position + gates.
     @Published var currentChunk = 0
     @Published var awaitingContinue = false   // paused at a chunk boundary — Continue advances
@@ -204,6 +206,9 @@ final class EchoClient: ObservableObject {
         d.onProgress = { [weak self] time, duration in
             self?.playbackTime = time
             self?.playbackDuration = duration
+        }
+        d.onLevel = { [weak self] level in
+            self?.audioLevel = Double(level)
         }
         return d
     }()
@@ -1030,8 +1035,9 @@ final class EchoClient: ObservableObject {
         guard next < chunks.count else { messageAudioDone(); return }
         if walkieMode {
             // The gate: audio pauses at the chunk boundary (music swells back);
-            // Continue plays the next part.
-            currentChunk = next
+            // Continue plays the next part. currentChunk deliberately STAYS on
+            // the finished paragraph so the highlight rests where the voice
+            // stopped until Continue is pressed (Ranny, 08-21 eve).
             awaitingContinue = true
             awaitingRender = false
         } else {
@@ -1039,11 +1045,11 @@ final class EchoClient: ObservableObject {
         }
     }
 
-    /// The gate control — advance to the next chunk.
+    /// The gate control — advance past the paragraph the highlight rests on.
     func continueMessage() {
         guard awaitingContinue else { return }
         awaitingContinue = false
-        playChunk(currentChunk)
+        playChunk(currentChunk + 1)      // playChunk itself skips failed chunks
     }
 
     /// A chunk finished downloading (or failed for good) — feed playback if

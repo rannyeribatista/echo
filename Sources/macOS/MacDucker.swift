@@ -17,6 +17,7 @@ import Foundation
 final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     var log: (String) -> Void = { print("EchoMac: \($0)") }
     var onProgress: ((TimeInterval, TimeInterval) -> Void)?
+    var onLevel: ((Float) -> Void)?
 
     private let queue = DispatchQueue(label: "echo.mac-audio", qos: .userInitiated)
     // Queue-confined state — touch only on `queue`.
@@ -143,6 +144,7 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
         self.onFinish = onFinish
         player = p
         p.delegate = self
+        p.isMeteringEnabled = true       // the rail orb breathes on this
         engageDuckLocked()
         p.play()
         startProgressTimerLocked()
@@ -173,6 +175,7 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
         }
         let cb = onFinish
         onFinish = nil
+        if let lcb = onLevel { DispatchQueue.main.async { lcb(0) } }
         if let cb { DispatchQueue.main.async { cb(fraction) } }
     }
 
@@ -312,7 +315,7 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     private func startProgressTimerLocked() {
         progressTimer?.cancel()
         let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now(), repeating: .milliseconds(250))
+        t.schedule(deadline: .now(), repeating: .milliseconds(100))
         t.setEventHandler { [weak self] in self?.tickProgressLocked() }
         t.resume()
         progressTimer = t
@@ -324,10 +327,19 @@ final class MacDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     }
 
     private func tickProgressLocked() {
-        guard let p = player, let cb = onProgress else { return }
+        guard let p = player else { return }
         let time = p.currentTime
         let duration = p.duration
-        DispatchQueue.main.async { cb(time, duration) }
+        if let cb = onProgress {
+            DispatchQueue.main.async { cb(time, duration) }
+        }
+        if let lcb = onLevel {
+            p.updateMeters()
+            // dBFS → linear 0…1; -60 dB and below reads as silence.
+            let db = p.averagePower(forChannel: 0)
+            let level = db <= -60 ? 0 : pow(10, db / 20)
+            DispatchQueue.main.async { lcb(level) }
+        }
     }
 
     // MARK: - Delegate

@@ -62,6 +62,7 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     /// is loaded, plus once after every pause/seek so the bar never shows a
     /// stale position.
     var onProgress: ((TimeInterval, TimeInterval) -> Void)?
+    var onLevel: ((Float) -> Void)?
 
     override init() {
         super.init()
@@ -146,6 +147,7 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
         self.onFinish = onFinish
         player = p
         p.delegate = self
+        p.isMeteringEnabled = true       // the rail orb breathes on this
 
         // Engage the duck: deactivate → duck category → reactivate (the only
         // sequence iOS actually honors — see the header). The keep-alive must
@@ -219,10 +221,18 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
     }
 
     private func tickProgressLocked() {
-        guard let p = player, let cb = onProgress else { return }
+        guard let p = player else { return }
         let time = p.currentTime
         let duration = p.duration
-        DispatchQueue.main.async { cb(time, duration) }
+        if let cb = onProgress {
+            DispatchQueue.main.async { cb(time, duration) }
+        }
+        if let lcb = onLevel {
+            p.updateMeters()
+            let db = p.averagePower(forChannel: 0)
+            let level = db <= -60 ? 0 : pow(10, db / 20)
+            DispatchQueue.main.async { lcb(level) }
+        }
     }
 
     // MARK: - Teardown
@@ -251,6 +261,7 @@ final class AudioDucker: NSObject, AVAudioPlayerDelegate, ClipPlayer {
         if restoringAudio { restoreLocked() }
         let cb = onFinish
         onFinish = nil
+        if let lcb = onLevel { DispatchQueue.main.async { lcb(0) } }
         if let cb { DispatchQueue.main.async { cb(fraction) } }
     }
 

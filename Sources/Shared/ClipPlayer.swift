@@ -10,6 +10,9 @@ protocol ClipPlayer: AnyObject {
     var log: (String) -> Void { get set }
     /// Mini-player feed: (currentTime, duration), ~4×/s while a clip is loaded.
     var onProgress: ((TimeInterval, TimeInterval) -> Void)? { get set }
+    /// Live output level 0…1 (~10×/s while playing, 0 on finish) — feeds the
+    /// speaking orb's breathing on the lane rail.
+    var onLevel: ((Float) -> Void)? { get set }
 
     /// Arm whatever keeps delivery alive while listening (iOS: audio session +
     /// silent loop for the background assertion; macOS: App Nap suppression).

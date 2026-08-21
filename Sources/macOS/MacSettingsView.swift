@@ -15,6 +15,8 @@ struct MacSettingsView: View {
     @AppStorage("macDuckMode") private var duckMode = "tap"
     @AppStorage("duckGain") private var duckGain = 0.16
     @AppStorage("appTheme") private var appTheme = "auto"
+    @AppStorage("messageFont") private var messageFont = "system"
+    @AppStorage("messageFontSize") private var messageFontSize = 17.0
     @ObservedObject private var log = EchoLog.shared
     @Environment(\.dismiss) private var dismiss
     @State private var duckVerdict: String?
@@ -46,6 +48,23 @@ struct MacSettingsView: View {
                     .pickerStyle(.segmented)
                     .onChange(of: appTheme) { _, t in Self.applyTheme(t) }
                 }
+                Section("Reading") {
+                    Picker("Message font", selection: $messageFont) {
+                        Text("System (SF)").tag("system")
+                        Text("New York").font(.system(size: 13, design: .serif)).tag("newyork")
+                        Text("Charter").font(.custom("Charter", size: 13)).tag("charter")
+                        Text("Georgia").font(.custom("Georgia", size: 13)).tag("georgia")
+                        Text("Palatino").font(.custom("Palatino", size: 13)).tag("palatino")
+                    }
+                    HStack {
+                        Text("Font size")
+                        Slider(value: $messageFontSize, in: 13...24, step: 1)
+                        Text("\(Int(messageFontSize)) pt")
+                            .font(.caption.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
+                }
                 Section("Ducking") {
                     Picker("Engine", selection: $duckMode) {
                         Text("Process tap — ducks everything").tag("tap")
@@ -53,7 +72,7 @@ struct MacSettingsView: View {
                     }
                     .pickerStyle(.radioGroup)
                     HStack {
-                        Text("Music volume while Nic speaks")
+                        Text("Background volume while ducked")
                         Slider(value: $duckGain, in: 0.05...0.5)
                         Text("\(Int(duckGain * 100))%")
                             .font(.caption.monospacedDigit())

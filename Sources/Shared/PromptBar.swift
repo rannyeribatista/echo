@@ -43,13 +43,14 @@ struct PromptBar: View {
                     .focused($focused)
                     .submitLabel(.send)
                     .onSubmit(send)
-                    .keyboardDoneButton { focused = false }
                 #if os(iOS)
-                // The guaranteed way out (HIG: always provide a way to dismiss
-                // the keyboard — we had none). The toolbar Done above is the
-                // standard idiom; this in-bar button is the belt-and-braces,
-                // since it can't depend on toolbar placement resolving. It
-                // appears only while typing, so the resting bar is unchanged.
+                // The way out of the keyboard (HIG: always provide one). A
+                // Done button in the keyboard's accessory toolbar was the
+                // other candidate and got removed: it adds a bar ON TOP of
+                // the keyboard, which is what was covering the input, and
+                // Ranny found its position poor anyway. This lives in the
+                // bar itself, appears only while typing, and rides above the
+                // keyboard with it.
                 if focused {
                     Button { focused = false } label: {
                         Image(systemName: "keyboard.chevron.compact.down")
@@ -118,25 +119,6 @@ struct PromptBar: View {
     private var pendingAsk: EchoClient.AskInfo? {
         guard let lane = client.openLane else { return nil }
         return client.laneStates[lane]?.ask
-    }
-}
-
-/// The standard iOS escape hatch: a Done button in the keyboard's own
-/// accessory toolbar. No-op on macOS, where the keyboard is never in the way.
-private extension View {
-    @ViewBuilder
-    func keyboardDoneButton(_ dismiss: @escaping () -> Void) -> some View {
-        #if os(iOS)
-        self.toolbar {
-            ToolbarItemGroup(placement: .keyboard) {
-                Spacer()
-                Button("Done", action: dismiss)
-                    .font(.body.weight(.semibold))
-            }
-        }
-        #else
-        self
-        #endif
     }
 }
 

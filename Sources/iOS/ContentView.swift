@@ -34,12 +34,20 @@ struct ContentView: View {
             } else {
                 TranscriptView(client: client, clips: visibleClips)
             }
-
-            PromptBar(client: client)
-                .padding(.bottom, 6)
         }
         .padding(.horizontal)
         .padding(.top, 10)
+        // The input rides in the bottom SAFE-AREA INSET rather than as the
+        // last row of the stack (Ranny: it sat partly under the keyboard).
+        // This is the Messages idiom: the system keeps an inset view above
+        // the keyboard when it opens and above the home indicator when it
+        // doesn't, and the pager above gets inset by exactly its height
+        // instead of being overlapped.
+        .safeAreaInset(edge: .bottom, spacing: 8) {
+            PromptBar(client: client)
+                .padding(.horizontal)
+                .padding(.bottom, 4)
+        }
         .background(CockpitGround(client: client).ignoresSafeArea())
         .preferredColorScheme(appTheme == "auto" ? nil
                               : (appTheme == "dark" ? .dark : .light))

@@ -120,27 +120,44 @@ private struct AskStrip: View {
                             .kerning(0.6)
                             .foregroundStyle(.tint)
                     }
+                    // fixedSize: without it SwiftUI shrinks the question to
+                    // one truncated line inside this stack — a question you
+                    // can't finish reading is not a question (Ranny).
                     Text(q.question)
                         .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     // Only the FIRST question is answerable from here: the
                     // terminal picker shows one at a time, and a tap on a
                     // later one would land on the wrong list.
                     if qi == 0 {
-                        ForEach(Array(q.options.enumerated()), id: \.offset) { oi, label in
+                        ForEach(Array(q.options.enumerated()), id: \.offset) { oi, opt in
                             Button { client.answerAsk(lane: lane, choice: oi) } label: {
-                                HStack(spacing: 8) {
+                                HStack(alignment: .top, spacing: 8) {
                                     Text("\(oi + 1)")
                                         .font(.caption2.monospacedDigit().weight(.semibold))
                                         .foregroundStyle(.secondary)
                                         .frame(width: 14)
-                                    Text(label)
-                                        .font(.callout)
-                                        .multilineTextAlignment(.leading)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(opt.label)
+                                            .font(.callout)
+                                            .multilineTextAlignment(.leading)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                        // The trade-off each option carries —
+                                        // shown in the terminal, so it belongs
+                                        // here too, or the choice is blind.
+                                        if !opt.description.isEmpty {
+                                            Text(opt.description)
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .multilineTextAlignment(.leading)
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
                                     Spacer(minLength: 0)
                                 }
                                 .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
+                                .padding(.vertical, 8)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .background(
                                     RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -191,10 +208,14 @@ private struct ConfirmStrip: View {
                     .controlSize(.small)
             }
             if !confirm.summary.isEmpty {
+                // In FULL (Ranny): deciding on a command you can only half
+                // read is not deciding. The server caps the summary at 500
+                // chars, so "all of it" stays a sane height; fixedSize is
+                // what stops SwiftUI truncating it inside this stack.
                 Text(confirm.summary)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
-                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
         }

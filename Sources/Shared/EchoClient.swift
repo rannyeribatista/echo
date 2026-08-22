@@ -621,10 +621,15 @@ final class EchoClient: ObservableObject {
 
     /// One of the model's multiple-choice questions (AskUserQuestion),
     /// published by nic-ask.sh so Echo can render it as buttons.
+    struct AskOption: Decodable, Equatable {
+        let label: String
+        let description: String
+    }
+
     struct AskQuestion: Decodable, Equatable {
         let header: String
         let question: String
-        let options: [String]
+        let options: [AskOption]
     }
 
     struct AskInfo: Decodable, Equatable {

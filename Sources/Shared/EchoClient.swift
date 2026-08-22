@@ -286,7 +286,8 @@ final class EchoClient: ObservableObject {
         return URLSession(configuration: cfg)
     }
 
-    // Config from UserDefaults (edited in SettingsView / the toggle). The host is
+    // Config from UserDefaults — edited in the Mac's Settings window and, on
+    // iOS, in the system Settings app via Settings.bundle. The host is
     // sanitized so pasting "http://100.x:8790/nic" still resolves to the bare IP.
     private var host: String {
         var h = (UserDefaults.standard.string(forKey: "macHost") ?? "")

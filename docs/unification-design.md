@@ -81,7 +81,8 @@ in · **P3** scaffolding retires, scripts die per the fate table.
 
 Parking lot: voice IN (push-to-talk, VoiceFlow twin, voice-"continue") — its
 own sit; lock-screen Continue; re-listen control; per-voice Over; push-wake
-delivery; Nic radio.
+delivery. (Nic radio was in this parking lot; it was REMOVED entirely
+2026-08-22 — Echo superseded it and Ranny chose deletion over archiving.)
 
 ## Ops residue (at merge / deploy)
 

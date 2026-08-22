@@ -512,6 +512,7 @@ final class EchoClient: ObservableObject {
     func appBecameActive() {
         prune()                // roll the 24h window forward — even when not listening
         guard isListening else { return }
+        if let l = openLane { probeMode(l) }     // freshen the mode chip
         let stalled = Date().timeIntervalSince(lastPollAt)
         if stalled > 90 {
             log.add("watchdog: poll loop stalled \(Int(stalled))s — restarting")
@@ -1193,14 +1194,27 @@ final class EchoClient: ObservableObject {
     /// One-line feedback under the input field. Deliberately failure-only:
     /// success needs no announcement — the bubble arriving IS the receipt
     /// (the server mirrors the injected prompt back through the status shim).
+    /// Transient (Ranny): it fades on its own after a few seconds.
     @Published var promptFeedback: String?
+    private var feedbackToken = 0
+
+    private func flashFeedback(_ msg: String) {
+        feedbackToken += 1
+        let token = feedbackToken
+        promptFeedback = msg
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard let self, self.feedbackToken == token else { return }
+            self.promptFeedback = nil
+        }
+    }
 
     /// Type + submit into the open lane's session (server /prompt → herdr).
     func sendPrompt(_ text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         guard let lane = openLane else {
-            promptFeedback = "Open a lane first."
+            flashFeedback("Open a lane first.")
             return
         }
         promptFeedback = nil
@@ -1212,12 +1226,12 @@ final class EchoClient: ObservableObject {
                 if code == 204 {
                     self.log.add("prompt sent → \(self.displayName(for: lane))")
                 } else {
-                    self.promptFeedback = Self.serverWhy(data)
-                        ?? "Send failed (\(code))."
+                    self.flashFeedback(Self.serverWhy(data)
+                        ?? "Send failed (\(code)).")
                     self.log.add("prompt REJECTED (\(code)) — \(self.promptFeedback ?? "")")
                 }
             } catch {
-                self.promptFeedback = "Send failed — \(error.localizedDescription)"
+                self.flashFeedback("Send failed — \(error.localizedDescription)")
             }
         }
     }
@@ -1233,18 +1247,25 @@ final class EchoClient: ObservableObject {
                 if code == 204 {
                     self.log.add("keys \(keys.joined(separator: "+")) → \(lane)")
                 } else {
-                    self.promptFeedback = Self.serverWhy(data) ?? "Keys failed (\(code))."
+                    self.flashFeedback(Self.serverWhy(data) ?? "Keys failed (\(code)).")
                 }
             } catch {
-                self.promptFeedback = "Keys failed — \(error.localizedDescription)"
+                self.flashFeedback("Keys failed — \(error.localizedDescription)")
             }
         }
     }
 
     /// shift+tab: cycle the lane's permission mode (default → accept edits →
-    /// plan → …). Blind by design — the terminal shows the resulting mode;
-    /// Echo only owns the chord.
-    func cycleMode(_ lane: String) { sendKeys(["shift+tab"], lane: lane) }
+    /// plan → …). The chord needs a terminal window with herdr open (a real
+    /// OS keystroke has to land somewhere); the chip converges on ground
+    /// truth either way via the follow-up probe.
+    func cycleMode(_ lane: String) {
+        sendKeys(["shift+tab"], lane: lane)
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            self?.probeMode(lane)
+        }
+    }
 
     /// Answer a pending permission request (the orange strip's Allow / Deny).
     /// The buttons vanish when the /v2/status snapshot folds the decision.

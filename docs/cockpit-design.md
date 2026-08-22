@@ -310,32 +310,45 @@ install (device unreachable), PermissionRequest hook wire in settings.json
 (classifier blocked the edit — needs Ranny's hand; snippet in the session
 close-out).
 
-**HANDOFF NOTE (2026-08-21 ~23:5x, budget at 99% — for whichever model
-continues, likely Opus 5).** Everything is DEPLOYED AND VERIFIED except ONE
-inch: Allow/Deny taps flow end-to-end (server log shows "CONFIRM → allow"
-decisions arriving from Echo and /confirm/wait handing them to the hook),
-but the harness IGNORES nic-confirm.sh's stdout —
-`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":"allow"}}`
-was field-tested and the terminal dialog still appeared. UPDATE (same
-night): docs re-checked — that flat-string schema IS correct, and the
-script provably prints it (scratch-server E2E). Prime remaining suspect:
-the running Claude CLI predates PermissionRequest decision support — panes
-showed "✔ Update installed · Restart to update", so sessions run an old
-binary. nic-confirm.sh now logs "confirm: EMITTED allow…" to
-~/.claude/voice/nic-say.log on every decision: after restarting sessions
-on the updated CLI, one tap test splits the world — EMITTED logged but
-dialog still shown = harness issue (escalate/report); EMITTED + tool
-proceeds = done; nothing logged = script path broke. No builds, no server
-restart needed: the hook file is read per event. Test = any
-non-allowlisted tool call in a default-mode session → tap Allow in Echo →
-the call must proceed WITHOUT the terminal dialog. Context that took hours
-to learn: herdr is now 0.8.2 (brew, symlinked at ~/.local/bin/herdr;
-0.7.1 backed up beside it) — send-keys works headless (mode circle
-verified: default→acceptEdits→plan→auto→default); herdr 0.8.2 `agent read`
-prints PLAIN TEXT (0.7 was JSON — probe_mode accepts both); echo-server's
-status seq is clock-seeded (zero-reset strands apps on stale snapshots);
-AskUserQuestion rendering is UNBLOCKED (arrows/digits/enter now land) and
-is the natural next build after the 08-25 token reset.
+**INPUT PHASE COMPLETE — 2026-08-21, all four surfaces verified live.**
+Type to any lane · hear and read every turn · switch permission modes ·
+answer permission requests. Nothing pending.
+
+*The last bug, and its lesson.* Allow/Deny taps flowed end-to-end for hours
+(the server logged `CONFIRM → allow`, the hook returned it) while the
+harness silently ignored the decision. The published docs — and a
+docs-reading subagent quoting them — say the payload is a flat string
+`"decision":"allow"`. **It is not.** The CLI's own zod validator (2.1.239),
+read straight out of the binary, wants an OBJECT:
+
+```
+hookSpecificOutput.decision = {"behavior":"allow"}                (allow)
+                            | {"behavior":"deny","message":"…"}   (deny)
+```
+
+The harness reads `decision.behavior`; the flat string fails the shape and
+falls through to the dialog with no error surfaced anywhere. Lesson worth
+keeping: **for hook payload schemas the shipped binary is ground truth, not
+the docs** — `strings "$(readlink -f ~/.local/bin/claude)" | grep -o
+'PermissionRequest"),decision.\{0,200\}'` settles it in one command. Proof
+of the fix is harness-side, in the session transcript:
+`{"type":"hook_permission_decision","decision":"allow","hookEvent":
+"PermissionRequest"}` — tool calls approved from the cockpit with no
+terminal dialog. nic-confirm.sh logs every emission (`confirm: EMITTED
+allow …` in nic-say.log), which is what split "script never emitted" from
+"harness ignored it".
+
+*Context that took the night to learn:* herdr is now 0.8.2 (brew,
+symlinked at ~/.local/bin/herdr; 0.7.1 backed up beside it) — send-keys
+encodes modifiers correctly, so mode cycling is headless (verified circle
+default→acceptEdits→plan→auto→default; Echo even set its own lane's mode to
+stage the confirm test); 0.8.2 `agent read` prints PLAIN TEXT where 0.7
+sent JSON (probe_mode accepts both); echo-server's status seq is
+clock-seeded (a zero-reset stranded apps on stale snapshots — the stuck
+strip with dead buttons); confirm wait is 240s, deliberately under the
+harness's 300s hook ceiling so the hand-back to the terminal is ours and
+orderly. **AskUserQuestion rendering is now UNBLOCKED** (arrows/digits/
+enter land) — the natural next build after the 08-25 token reset.
 
 **Ride-along adjustments (Ranny, 2026-08-21 night — ship with the input build):**
 - iPhone: the transport is claustrophobic in the narrow width — audio controls

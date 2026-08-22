@@ -310,6 +310,26 @@ install (device unreachable), PermissionRequest hook wire in settings.json
 (classifier blocked the edit — needs Ranny's hand; snippet in the session
 close-out).
 
+**HANDOFF NOTE (2026-08-21 ~23:5x, budget at 99% — for whichever model
+continues, likely Opus 5).** Everything is DEPLOYED AND VERIFIED except ONE
+inch: Allow/Deny taps flow end-to-end (server log shows "CONFIRM → allow"
+decisions arriving from Echo and /confirm/wait handing them to the hook),
+but the harness IGNORES nic-confirm.sh's stdout —
+`{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":"allow"}}`
+was field-tested and the terminal dialog still appeared. Fix = correct that
+one printf in `core/voice/nic-confirm.sh` (likely `decision` must be an
+object, e.g. `{"behavior":"allow"}` — check current hooks docs). No builds,
+no server restart needed: the hook file is read per event. Test = any
+non-allowlisted tool call in a default-mode session → tap Allow in Echo →
+the call must proceed WITHOUT the terminal dialog. Context that took hours
+to learn: herdr is now 0.8.2 (brew, symlinked at ~/.local/bin/herdr;
+0.7.1 backed up beside it) — send-keys works headless (mode circle
+verified: default→acceptEdits→plan→auto→default); herdr 0.8.2 `agent read`
+prints PLAIN TEXT (0.7 was JSON — probe_mode accepts both); echo-server's
+status seq is clock-seeded (zero-reset strands apps on stale snapshots);
+AskUserQuestion rendering is UNBLOCKED (arrows/digits/enter now land) and
+is the natural next build after the 08-25 token reset.
+
 **Ride-along adjustments (Ranny, 2026-08-21 night — ship with the input build):**
 - iPhone: the transport is claustrophobic in the narrow width — audio controls
   (buttons + scrubber + Continue) move to a NEW ROW beneath the mode row;

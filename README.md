@@ -48,9 +48,11 @@ open Echo.xcodeproj
 Then:
 
 1. On the Mac, start the delivery server: `core/voice/echo-send.sh start`.
-2. In the app, tap the gear → enter your Mac's Tailscale host, port, and the
-   shared token (they live in `core/voice/echo.conf`).
-3. Choose **Always-on** or leave it off, then **Start listening**.
+2. On the iPhone, open **Settings → Echo** (the system Settings app, not the
+   app itself — there is no gear inside Echo) and enter your Mac's Tailscale
+   host, port, and the shared token (they live in `core/voice/echo.conf`).
+3. Open Echo. It comes up listening — opening the app IS the intent, so there
+   is no "Start listening" button to press.
 4. Test it: `core/voice/echo-send.sh test` — your music should duck and you
    should hear the clip.
 
@@ -69,8 +71,9 @@ xcodegen
 open Echo.xcodeproj   # EchoMac scheme → My Mac → ⌘R
 ```
 
-First run: gear → set the shared token (host defaults to `127.0.0.1`; the
-server runs on the same machine) → **Test duck** with music playing. macOS asks once for *System Audio Recording* —
+First run: **Echo menu → Settings (⌘,)** → set the shared token (host defaults
+to `127.0.0.1`; the server runs on the same machine) → **Test duck** with
+music playing. macOS asks once for *System Audio Recording* —
 deny it and the tap "works" while capturing silence, which is exactly what
 the test detects and reports. An AppleScript Spotify/Music volume dip is
 selectable as fallback. Unlike the phone, no 7-day re-sign: a locally

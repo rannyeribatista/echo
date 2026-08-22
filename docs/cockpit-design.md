@@ -136,7 +136,9 @@ exact `/status` POST shape (token-gated like everything else) · hush scope unde
 multiple lanes (recommend: any prompt quiets the room, as today — One Echo A7
 still observes) · the main toggle writes `owner` for routing, but the re-speak
 behavior still needs the chosen session running the coordinator ritual ("claim
-the voice") — v0 keeps the ritual unchanged.
+the voice") — v0 keeps the ritual unchanged. **[SUPERSEDED 2026-08-22: the
+claim ritual is retired. Echo's "Set as main orchestrator" writes `owner`
+directly; no session-side ritual remains.]**
 
 **Resolved from the first live drive (2026-08-21, Ranny at the window):**
 **ghost the dead.** The owner role hopped across sessions for 36h, so the 24h
@@ -184,7 +186,10 @@ switch. "Stop listening" became MUTE (messages arrive and light dots, never
 auto-play, taps still obey). One control row: transport left, right cluster =
 auto-play (bolt) · reasoning/full-play segmented (brain/infinity) · mute
 (speaker). "Play again" gone — every paragraph is a play button. Freed height
-reserved for user input (next iteration). Full lifecycle verified live:
+reserved for user input (next iteration). **[SUPERSEDED same night: mute was
+removed as redundant with auto-play, which took over the speaker icon; the
+bolt is gone; and the control row became two rows — config on top, media
+transport beneath. The freed height became the PromptBar.]** Full lifecycle verified live:
 ready → working → finished → ghost on a fresh terminal lane, closed by hand.
 
 **Design notes (recommendations, revisit from use):** render every worker turn
@@ -244,18 +249,21 @@ seam.
 **The proven primitive (spike 2026-08-21, `it-really-works-42`):** herdr's CLI
 injects into panes — `herdr pane send-text <pane> <text>` + `herdr pane
 send-keys <pane> enter` executed a command in a live scratch pane, verified by
-filesystem side effect. Also available: `herdr agent send <target> <text>`
-(agent/session-addressed — herdr already knows session→pane from the very
-`report-agent-session` hook wired on this Mac), `herdr agent list` (the
-mapping), `herdr agent wait --status`, and **raw `send-keys`** (arrow keys,
-enter — and the mode-cycle chord, if herdr names it; verify `shift+tab` naming
-during build).
+filesystem side effect. Also available: `herdr agent list` (the session→pane
+mapping, from the `report-agent-session` hook wired on this Mac) and **raw
+`send-keys`**. ⚠️ CORRECTED 2026-08-22 after the herdr 0.8.2 upgrade: this
+paragraph originally named `herdr agent send <target> <text>` and `herdr
+agent wait --status` — **neither exists in 0.8.2**. The equivalents are
+`herdr agent prompt <target> <text> [--wait]` and `agent wait --until
+<STATUS>`. What shipped uses `pane send-text` + `send-keys`, which are real
+and proven, so only this prose was ever wrong.
 
 **The pipe:** Echo app (input box) → `POST /prompt {lane, text}` on
 echo-server (token-gated, same pattern as /status and /links) → a small
-dispatcher resolves lane → session (the status feed's session ids) → `herdr
-agent send` (fallback: pane send-text via the session→pane map) + enter.
-Server-side, ~40 lines; phone works free via the same tailnet endpoint.
+dispatcher resolves lane → session (the status feed's session ids) → `pane
+send-text` + `send-keys enter` via the session→pane map. Server-side, ~40
+lines; phone works free via the same tailnet endpoint. (Plan-time text said
+`herdr agent send` here; that subcommand doesn't exist — corrected 08-22.)
 
 **The UI (all owned territory):**
 - Turn containers: one magnetic page = user prompt + preamble + final. Group

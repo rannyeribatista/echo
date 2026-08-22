@@ -43,6 +43,26 @@ struct PromptBar: View {
                     .focused($focused)
                     .submitLabel(.send)
                     .onSubmit(send)
+                    .keyboardDoneButton { focused = false }
+                #if os(iOS)
+                // The guaranteed way out (HIG: always provide a way to dismiss
+                // the keyboard — we had none). The toolbar Done above is the
+                // standard idiom; this in-bar button is the belt-and-braces,
+                // since it can't depend on toolbar placement resolving. It
+                // appears only while typing, so the resting bar is unchanged.
+                if focused {
+                    Button { focused = false } label: {
+                        Image(systemName: "keyboard.chevron.compact.down")
+                            .font(.system(size: 18))
+                            .foregroundStyle(.secondary)
+                            .frame(width: 44, height: 44)   // HIG hit target
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Hide keyboard")
+                    .transition(.opacity)
+                }
+                #endif
                 Button(action: send) {
                     Image(systemName: "arrow.up.circle.fill")
                         .font(.system(size: 22))
@@ -60,6 +80,7 @@ struct PromptBar: View {
         .animation(.easeInOut(duration: 0.22), value: pendingConfirm?.id)
         .animation(.easeInOut(duration: 0.22), value: pendingAsk?.id)
         .animation(.easeInOut(duration: 0.22), value: client.promptFeedback)
+        .animation(.easeInOut(duration: 0.18), value: focused)
     }
 
     private var ready: Bool {
@@ -97,6 +118,25 @@ struct PromptBar: View {
     private var pendingAsk: EchoClient.AskInfo? {
         guard let lane = client.openLane else { return nil }
         return client.laneStates[lane]?.ask
+    }
+}
+
+/// The standard iOS escape hatch: a Done button in the keyboard's own
+/// accessory toolbar. No-op on macOS, where the keyboard is never in the way.
+private extension View {
+    @ViewBuilder
+    func keyboardDoneButton(_ dismiss: @escaping () -> Void) -> some View {
+        #if os(iOS)
+        self.toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Done", action: dismiss)
+                    .font(.body.weight(.semibold))
+            }
+        }
+        #else
+        self
+        #endif
     }
 }
 

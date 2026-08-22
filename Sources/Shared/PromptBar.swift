@@ -110,8 +110,6 @@ private struct AskStrip: View {
     let lane: String
     let ask: EchoClient.AskInfo
 
-    /// Rows toggled on for a multi-select question (indices into options).
-    @State private var picked: Set<Int> = []
     /// The "Other" row's free text, when he'd rather answer in his own words.
     @State private var other = ""
     @State private var showingOther = false
@@ -146,23 +144,19 @@ private struct AskStrip: View {
                     if qi == 0 {
                         ForEach(Array(q.options.enumerated()), id: \.offset) { oi, opt in
                             Button {
-                                if q.isMulti {
-                                    if picked.contains(oi) { picked.remove(oi) }
-                                    else { picked.insert(oi) }
-                                } else {
-                                    client.answerAsk(lane: lane, choice: oi)
-                                }
+                                // Multi-select rows are READ-ONLY here — see
+                                // the note below; tapping would promise an
+                                // answer Echo can't actually submit.
+                                guard !q.isMulti else { return }
+                                client.answerAsk(lane: lane, choice: oi)
                             } label: {
                                 HStack(alignment: .top, spacing: 8) {
                                     // Multi-select shows real checkboxes: the
                                     // terminal is toggling rows with space, so
                                     // the card must read as "pick several".
                                     if q.isMulti {
-                                        Image(systemName: picked.contains(oi)
-                                              ? "checkmark.square.fill" : "square")
-                                            .foregroundStyle(picked.contains(oi)
-                                                             ? AnyShapeStyle(.tint)
-                                                             : AnyShapeStyle(.secondary))
+                                        Image(systemName: "square")
+                                            .foregroundStyle(.tertiary)
                                             .frame(width: 14)
                                     } else {
                                         Text("\(oi + 1)")
@@ -199,18 +193,18 @@ private struct AskStrip: View {
                             .buttonStyle(.plain)
                         }
                         if q.isMulti {
-                            Button {
-                                client.answerAsk(lane: lane, choices: Array(picked))
-                                picked = []
-                            } label: {
-                                Text(picked.isEmpty ? "Pick one or more"
-                                                    : "Send \(picked.count) answer\(picked.count == 1 ? "" : "s")")
-                                    .font(.caption.weight(.semibold))
-                                    .frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
-                            .disabled(picked.isEmpty)
+                            // HONEST LIMIT (measured 2026-08-21): space
+                            // toggles reach the picker, but Enter does not
+                            // submit a multi-select one — twice verified, and
+                            // a control that silently sends the wrong answer
+                            // to a real decision is worse than no control.
+                            // The options above still READ here; ticking is
+                            // the terminal's job until this is cracked.
+                            Label("Tick these in the terminal — Echo can't submit multi-select yet",
+                                  systemImage: "keyboard")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 2)
                         }
                         // The "Other" row the terminal always offers: his own
                         // words instead of one of ours.
@@ -248,7 +242,7 @@ private struct AskStrip: View {
             }
         }
         .onChange(of: ask.id) { _ in          // a new question starts clean
-            picked = []; other = ""; showingOther = false
+            other = ""; showingOther = false
         }
         .padding(11)
         .background(

@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// The stories rail, final form of the cockpit iteration (2026-08-21):
 /// the SELECTED lane's orb sits centered and featured at 115% size; every
@@ -171,6 +174,14 @@ struct LaneCircle: View {
     let rename: () -> Void
 
     @State private var coasting = false
+    #if os(macOS)
+    /// False while the window is fully covered by other windows (AppKit's
+    /// occlusion state). iOS needs no equivalent: the system already stops
+    /// rendering a backgrounded app.
+    @State private var visible = true
+    #else
+    private let visible = true
+    #endif
 
     private var animated: Bool {
         !info.isGhost && (isSpeaking || info.state == "working")
@@ -233,14 +244,30 @@ struct LaneCircle: View {
         .help(helpText)
     }
 
+    /// PERF (2026-08-21): the rail was the whole idle cost of the app — every
+    /// animating orb rebuilds a body of layered gradients, blurs, a Canvas and
+    /// a gaussian BulgeCircle path each tick. Two cuts that cost nothing
+    /// visually: the half-size fleet orbs run at 12fps (imperceptible at that
+    /// diameter, half the work), and NOTHING animates while the window is
+    /// hidden behind other windows — Echo lives open all day, and an invisible
+    /// orb has no one to breathe for.
+    private var frameInterval: Double { unit >= 1.0 ? 1.0 / 24 : 1.0 / 12 }
+
     private var orb: some View {
-        TimelineView(.animation(minimumInterval: 1 / 24,
-                                paused: !(animated || coasting))) { tl in
+        let moving = (animated || coasting) && visible
+        return TimelineView(.animation(minimumInterval: frameInterval,
+                                       paused: !moving)) { tl in
             LaneOrbView(info: info, unit: unit,
-                        phase: (animated || coasting)
+                        phase: moving
                         ? tl.date.timeIntervalSinceReferenceDate : 0,
                         isSpeaking: isSpeaking, level: level)
         }
+        #if os(macOS)
+        .onReceive(NotificationCenter.default.publisher(
+            for: NSApplication.didChangeOcclusionStateNotification)) { _ in
+            visible = NSApp.occlusionState.contains(.visible)
+        }
+        #endif
         // Motion coasts for a beat after speech/work ends instead of freezing
         // mid-swirl.
         .onChange(of: animated) { on in

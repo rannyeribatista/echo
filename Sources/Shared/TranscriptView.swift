@@ -305,26 +305,10 @@ struct TranscriptView: View {
     /// (pull-downs stopped one short of the real newest; the button, running
     /// in the fresh view, worked fine). `client` is a reference, so deriving
     /// the list from it reads live data even inside the stale closure.
-    private var ordered: [Turn] {
-        let lane = client.openLane
-        let list: [Clip] = client.clips.filter { lane == nil || $0.lane == lane }.reversed()
-        var turns: [Turn] = []
-        var at: [String: Int] = [:]
-        for c in list {
-            if let pid = c.promptId, !pid.isEmpty {
-                let key = "\(c.lane)|\(pid)"
-                if let i = at[key] {
-                    turns[i] = Turn(id: key, clips: turns[i].clips + [c])
-                    continue
-                }
-                at[key] = turns.count
-                turns.append(Turn(id: key, clips: [c]))
-            } else {
-                turns.append(Turn(id: c.id.uuidString, clips: [c]))
-            }
-        }
-        return turns
-    }
+    /// The grouping itself lives on the client, which CACHES it: this getter
+    /// is read five-plus times per body pass and the body re-runs inside the
+    /// rail's animation, so rebuilding here was O(clips) many times a frame.
+    private var ordered: [Turn] { client.turns(for: client.openLane) }
     private var newestId: String? { ordered.last?.id }
     private var current: Turn? {
         if let pageId, let t = ordered.first(where: { $0.id == pageId }) { return t }

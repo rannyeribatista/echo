@@ -152,18 +152,39 @@ final class EchoClient: ObservableObject {
     @Published var awaitingContinue = false   // paused at a chunk boundary — Continue advances
     @Published var awaitingRender = false     // want the next chunk; the Mac hasn't finished it
     /// Newest-first history of the last 24 hours, persisted across launches.
-    @Published var clips: [Clip] = []
+    /// PERF (2026-08-21): every mutation drops the derived caches below.
+    /// `lanes` and `turns(for:)` are O(clips) and were being rebuilt inside
+    /// the rail's 24fps animation — the cost grew with every message of the
+    /// day, which is exactly the "gets slower until I relaunch" Ranny saw.
+    @Published var clips: [Clip] = [] { didSet { invalidateDerived() } }
     /// COCKPIT RAIL (2026-08-21). The lane whose pane fills the window — the
     /// only lane that sounds aloud besides the main orchestrator. nil until
     /// the first message adopts its lane (fresh install = pre-rail behavior).
-    @Published private(set) var openLane: String?
+    @Published private(set) var openLane: String? { didSet { invalidateDerived() } }
     /// The main orchestrator lane, if promoted (A10 "both"): its voice leads
     /// while every other lane queues silently to its pane.
-    @Published private(set) var mainLane: String?
+    @Published private(set) var mainLane: String? { didSet { invalidateDerived() } }
     /// Per-lane harness state from the server's /v2/status feed (A9 table:
     /// ready|working|attention|finished|closed). Empty against an old server —
     /// the rail degrades to unplayed-dot rings.
-    @Published private(set) var laneStates: [String: LaneStatusEntry] = [:]
+    @Published private(set) var laneStates: [String: LaneStatusEntry] = [:] {
+        didSet { invalidateDerived() }
+    }
+
+    // MARK: - Derived-state caches (perf)
+
+    /// Rebuilt lazily on first read after any change to clips / lane states /
+    /// routing. Reads happen many times per frame (each orb, the ground's
+    /// two lookups, the pager's five) — this turns all of them into one.
+    private var lanesCache: [LaneInfo]?
+    private var turnsCache: [Turn]?
+    private var turnsCacheLane: String??
+
+    private func invalidateDerived() {
+        lanesCache = nil
+        turnsCache = nil
+        turnsCacheLane = nil
+    }
 
     let log = EchoLog.shared
     private let store = ClipStore()
@@ -216,12 +237,23 @@ final class EchoClient: ObservableObject {
         let d = MacDucker()
         #endif
         d.log = { [weak self] msg in self?.log.add("audio: \(msg)") }
+        // PERF: these fire ~10x/second and EVERY view observes this object, so
+        // an unconditional assign re-laid-out the whole window 20 times a
+        // second. Publish only on a change worth a repaint — the scrubber
+        // moves in quarter-seconds, the orb breathes in visible steps.
         d.onProgress = { [weak self] time, duration in
-            self?.playbackTime = time
-            self?.playbackDuration = duration
+            guard let self else { return }
+            if abs(time - self.playbackTime) >= 0.25 || self.playbackTime > time {
+                self.playbackTime = time
+            }
+            if self.playbackDuration != duration { self.playbackDuration = duration }
         }
         d.onLevel = { [weak self] level in
-            self?.audioLevel = Double(level)
+            guard let self else { return }
+            let v = Double(level)
+            if abs(v - self.audioLevel) >= 0.03 || (v == 0 && self.audioLevel != 0) {
+                self.audioLevel = v
+            }
         }
         return d
     }()
@@ -302,6 +334,39 @@ final class EchoClient: ObservableObject {
     /// the status feed knows (closed lanes only linger while they still have
     /// clips to consult). Main first, then by latest activity.
     var lanes: [LaneInfo] {
+        if let c = lanesCache { return c }
+        let built = buildLanes()
+        lanesCache = built
+        return built
+    }
+
+    /// The open lane's history as pager TURNS (his prompt + the opening and
+    /// final that answered it), grouped by (lane, prompt id); clips without a
+    /// turn id page alone. Cached — the pager reads it several times per body.
+    func turns(for lane: String?) -> [Turn] {
+        if let c = turnsCache, turnsCacheLane == .some(lane) { return c }
+        let list: [Clip] = clips.filter { lane == nil || $0.lane == lane }.reversed()
+        var built: [Turn] = []
+        var at: [String: Int] = [:]
+        for c in list {
+            if let pid = c.promptId, !pid.isEmpty {
+                let key = "\(c.lane)|\(pid)"
+                if let i = at[key] {
+                    built[i] = Turn(id: key, clips: built[i].clips + [c])
+                    continue
+                }
+                at[key] = built.count
+                built.append(Turn(id: key, clips: [c]))
+            } else {
+                built.append(Turn(id: c.id.uuidString, clips: [c]))
+            }
+        }
+        turnsCache = built
+        turnsCacheLane = .some(lane)
+        return built
+    }
+
+    private func buildLanes() -> [LaneInfo] {
         var activity: [String: Date] = [:]
         var unplayed: [String: Int] = [:]
         for c in clips {

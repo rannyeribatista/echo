@@ -619,6 +619,20 @@ final class EchoClient: ObservableObject {
         let ts: Double?
     }
 
+    /// One of the model's multiple-choice questions (AskUserQuestion),
+    /// published by nic-ask.sh so Echo can render it as buttons.
+    struct AskQuestion: Decodable, Equatable {
+        let header: String
+        let question: String
+        let options: [String]
+    }
+
+    struct AskInfo: Decodable, Equatable {
+        let id: String
+        let questions: [AskQuestion]
+        let ts: Double?
+    }
+
     /// One lane's entry in the /v2/status snapshot (cockpit rail).
     struct LaneStatusEntry: Decodable, Equatable {
         let state: String       // ready|working|attention|finished|closed
@@ -627,6 +641,7 @@ final class EchoClient: ObservableObject {
         let links: [LaneLink]?
         let confirm: ConfirmInfo?
         let mode: String?       // default|acceptEdits|plan|auto|bypassPermissions
+        let ask: AskInfo?
     }
 
     /// The /v2/status long-poll answer: a fold counter + the full snapshot.
@@ -1329,6 +1344,32 @@ final class EchoClient: ObservableObject {
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 4_000_000_000)
             self?.probeMode(lane)
+        }
+    }
+
+    /// Answer one of the model's questions by driving the terminal picker
+    /// (the server sends `down` × index, then Enter). Optimistically clears
+    /// the card so the tap feels instant; the next status snapshot confirms.
+    func answerAsk(lane: String, choice: Int) {
+        if var st = laneStates[lane] {
+            st = LaneStatusEntry(state: st.state, session: st.session, ts: st.ts,
+                                 links: st.links, confirm: st.confirm,
+                                 mode: st.mode, ask: nil)
+            laneStates[lane] = st
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let (code, data) = try await self.post(
+                    "/ask/answer", body: ["lane": lane, "choice": choice])
+                if code == 204 {
+                    self.log.add("answered question with option \(choice + 1) (\(lane))")
+                } else {
+                    self.flashFeedback(Self.serverWhy(data) ?? "Answer failed (\(code)).")
+                }
+            } catch {
+                self.flashFeedback("Answer failed — \(error.localizedDescription)")
+            }
         }
     }
 

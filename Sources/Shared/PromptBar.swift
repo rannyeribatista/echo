@@ -21,6 +21,10 @@ struct PromptBar: View {
 
     var body: some View {
         VStack(spacing: 8) {
+            if let lane = client.openLane, let ask = pendingAsk {
+                AskStrip(client: client, lane: lane, ask: ask)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
             if let confirm = pendingConfirm {
                 ConfirmStrip(client: client, confirm: confirm)
                     .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -54,6 +58,7 @@ struct PromptBar: View {
             .background(glass)
         }
         .animation(.easeInOut(duration: 0.22), value: pendingConfirm?.id)
+        .animation(.easeInOut(duration: 0.22), value: pendingAsk?.id)
         .animation(.easeInOut(duration: 0.22), value: client.promptFeedback)
     }
 
@@ -87,6 +92,79 @@ struct PromptBar: View {
     private var pendingConfirm: EchoClient.ConfirmInfo? {
         guard let lane = client.openLane else { return nil }
         return client.laneStates[lane]?.confirm
+    }
+
+    private var pendingAsk: EchoClient.AskInfo? {
+        guard let lane = client.openLane else { return nil }
+        return client.laneStates[lane]?.ask
+    }
+}
+
+/// The model's question, made tappable — the last piece of the non-power-user
+/// interface (2026-08-21). Tapping an option drives the terminal picker, so
+/// the answer is the same one the dialog would have recorded; the dialog stays
+/// live for the keyboard too. Multi-question asks list in order: answer the
+/// first, the terminal advances, the next card follows it.
+private struct AskStrip: View {
+    @ObservedObject var client: EchoClient
+    let lane: String
+    let ask: EchoClient.AskInfo
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(ask.questions.enumerated()), id: \.offset) { qi, q in
+                VStack(alignment: .leading, spacing: 6) {
+                    if !q.header.isEmpty {
+                        Text(q.header.uppercased())
+                            .font(.caption2.weight(.semibold))
+                            .kerning(0.6)
+                            .foregroundStyle(.tint)
+                    }
+                    Text(q.question)
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // Only the FIRST question is answerable from here: the
+                    // terminal picker shows one at a time, and a tap on a
+                    // later one would land on the wrong list.
+                    if qi == 0 {
+                        ForEach(Array(q.options.enumerated()), id: \.offset) { oi, label in
+                            Button { client.answerAsk(lane: lane, choice: oi) } label: {
+                                HStack(spacing: 8) {
+                                    Text("\(oi + 1)")
+                                        .font(.caption2.monospacedDigit().weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 14)
+                                    Text(label)
+                                        .font(.callout)
+                                        .multilineTextAlignment(.leading)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                        .fill(Color.primary.opacity(0.07))
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    } else {
+                        Text("answer above first")
+                            .font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+        .padding(11)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.accentColor.opacity(0.09))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.22), lineWidth: 1)
+                )
+        )
     }
 }
 

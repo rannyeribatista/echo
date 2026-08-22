@@ -310,9 +310,40 @@ install (device unreachable), PermissionRequest hook wire in settings.json
 (classifier blocked the edit — needs Ranny's hand; snippet in the session
 close-out).
 
-**INPUT PHASE COMPLETE — 2026-08-21, all four surfaces verified live.**
+**INPUT PHASE COMPLETE — 2026-08-21, every surface verified live.**
 Type to any lane · hear and read every turn · switch permission modes ·
-answer permission requests. Nothing pending.
+answer permission requests · **answer the model's questions**. Nothing
+pending; the non-power-user interface is closed.
+
+*AskUserQuestion (the last piece).* nic-ask.sh publishes the question and
+its option labels on scoped Pre/PostToolUse matchers (async — it can never
+stall a turn); they ride the status snapshot; AskStrip renders them above
+the input. A tap ANSWERS BY DRIVING THE TERMINAL PICKER — `down` × index
+then `enter` — so Echo's tap and the keyboard produce the identical
+result and the dialog stays fully usable. Only the first question is
+tappable: the picker shows one list at a time, and a tap on a later one
+would land on the wrong list. Proven by using it for a real decision
+(server log: `ASK open` → `ASK answer … option 0`, tool returned that
+option). Deliberately unbuilt: multiSelect toggling (needs space) and the
+free-text "Other" row.
+
+*Performance — 65% → 12% idle CPU (same Debug build; ~5x), 2026-08-21.*
+Profiled with `sample(1)`, not guessed, and the guess in the To-Do was
+WRONG: the cost was never Canvas/blur drawing or the audio stack — it was
+SwiftUI **layout**, driven by O(clips) derived state recomputed inside the
+rail's 24fps animation. `EchoClient.lanes` walked every clip (once per orb
+per frame, plus twice more from CockpitGround) and `TranscriptView.ordered`
+rebuilt the whole turn grouping ~5× per body pass. Both are now cached on
+the client, invalidated by `didSet` on clips / laneStates / openLane /
+mainLane. **That is the mechanism behind "it degrades through the day and
+a relaunch fixes it"**: per-frame work scaled with the day's message count.
+Also cut: 10Hz `audioLevel`/`playbackTime` publishes now fire only on a
+change worth a repaint (every view observes that one object), fleet orbs
+animate at 12fps, and nothing animates while the window is occluded.
+Release measures 9.5% but canonical deliberately STAYS on Debug (Ranny's
+call, answered from Echo): re-signing risks a ducking-permission re-grant
+for ~2 points of CPU. Method note for next time: `sample <pid> 3 -f out`
+then rank frames — it named the two getters in one pass.
 
 *The last bug, and its lesson.* Allow/Deny taps flowed end-to-end for hours
 (the server logged `CONFIRM → allow`, the hook returned it) while the

@@ -316,10 +316,17 @@ inch: Allow/Deny taps flow end-to-end (server log shows "CONFIRM → allow"
 decisions arriving from Echo and /confirm/wait handing them to the hook),
 but the harness IGNORES nic-confirm.sh's stdout —
 `{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":"allow"}}`
-was field-tested and the terminal dialog still appeared. Fix = correct that
-one printf in `core/voice/nic-confirm.sh` (likely `decision` must be an
-object, e.g. `{"behavior":"allow"}` — check current hooks docs). No builds,
-no server restart needed: the hook file is read per event. Test = any
+was field-tested and the terminal dialog still appeared. UPDATE (same
+night): docs re-checked — that flat-string schema IS correct, and the
+script provably prints it (scratch-server E2E). Prime remaining suspect:
+the running Claude CLI predates PermissionRequest decision support — panes
+showed "✔ Update installed · Restart to update", so sessions run an old
+binary. nic-confirm.sh now logs "confirm: EMITTED allow…" to
+~/.claude/voice/nic-say.log on every decision: after restarting sessions
+on the updated CLI, one tap test splits the world — EMITTED logged but
+dialog still shown = harness issue (escalate/report); EMITTED + tool
+proceeds = done; nothing logged = script path broke. No builds, no server
+restart needed: the hook file is read per event. Test = any
 non-allowlisted tool call in a default-mode session → tap Allow in Echo →
 the call must proceed WITHOUT the terminal dialog. Context that took hours
 to learn: herdr is now 0.8.2 (brew, symlinked at ~/.local/bin/herdr;

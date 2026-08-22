@@ -1376,16 +1376,18 @@ final class EchoClient: ObservableObject {
         answerAsk(lane: lane, body: ["lane": lane, "other": text], what: "other")
     }
 
+    /// True while an answer is in flight — the card stays put and shows it.
+    @Published private(set) var answeringAsk = false
+
     private func answerAsk(lane: String, body: [String: Any], what: String) {
-        // Clear the card optimistically so the tap feels instant; the next
-        // status snapshot (PostToolUse closes it) is the real confirmation.
-        if let st = laneStates[lane] {
-            laneStates[lane] = LaneStatusEntry(
-                state: st.state, session: st.session, ts: st.ts, links: st.links,
-                confirm: st.confirm, mode: st.mode, ask: nil)
-        }
+        // The card is NOT cleared optimistically (Ranny, 2026-08-21): an
+        // answer that silently failed took the card away while the terminal
+        // dialog stayed open, and the lane sat stuck with no way back in.
+        // Only PostToolUse — the tool actually completing — closes it.
+        answeringAsk = true
         Task { [weak self] in
             guard let self else { return }
+            defer { self.answeringAsk = false }
             do {
                 let (code, data) = try await self.post("/ask/answer", body: body)
                 if code == 204 {

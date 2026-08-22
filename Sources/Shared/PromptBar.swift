@@ -120,11 +120,18 @@ private struct AskStrip: View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(ask.questions.enumerated()), id: \.offset) { qi, q in
                 VStack(alignment: .leading, spacing: 6) {
-                    if !q.header.isEmpty {
-                        Text(q.header.uppercased())
-                            .font(.caption2.weight(.semibold))
-                            .kerning(0.6)
-                            .foregroundStyle(.tint)
+                    HStack(spacing: 6) {
+                        if !q.header.isEmpty {
+                            Text(q.header.uppercased())
+                                .font(.caption2.weight(.semibold))
+                                .kerning(0.6)
+                                .foregroundStyle(.tint)
+                        }
+                        if client.answeringAsk {
+                            ProgressView().controlSize(.small)
+                            Text("sending…")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
                     // fixedSize: without it SwiftUI shrinks the question to
                     // one truncated line inside this stack — a question you

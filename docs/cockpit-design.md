@@ -322,10 +322,33 @@ the input. A tap ANSWERS BY DRIVING THE TERMINAL PICKER — `down` × index
 then `enter` — so Echo's tap and the keyboard produce the identical
 result and the dialog stays fully usable. Only the first question is
 tappable: the picker shows one list at a time, and a tap on a later one
-would land on the wrong list. Proven by using it for a real decision
+would land on the wrong list. Proven by using it for real decisions
 (server log: `ASK open` → `ASK answer … option 0`, tool returned that
-option). Deliberately unbuilt: multiSelect toggling (needs space) and the
-free-text "Other" row.
+option). AskUserQuestion does NOT raise a permission strip — it IS the
+question, and both cards were showing the same text; nic-confirm allows it
+outright. Question text, option labels AND option descriptions all render
+in full (`fixedSize`, or SwiftUI clips them to a truncated line).
+
+*What works, measured:* single-select ✓ · the free-text "Other" row ✓
+(navigate past the last option, Enter, type, Enter). **Multi-select does
+NOT — the rows are read-only in Echo and say so.** Two live tests: `space`
+toggles DO reach the picker, but Enter never submits a multi-select
+question (the server retried, then a bare Enter afterwards also failed;
+single-select submits reliably with the same key). Rather than ship a
+control that silently sends the wrong answer to a real decision, the rows
+stay readable and ticking goes back to the keyboard. **Next attempt must
+not test against Ranny's live session** — spawn a scratch Claude session in
+its own pane, raise a multiSelect question there, and poke it while reading
+the pane to learn which key actually submits.
+
+*Two rules those tests earned, both now in the server:* keys are sent ONE
+PER CALL with ~180ms between (a five-key burst was swallowed by the picker
+— only one toggle survived), and every submit is VERIFIED by watching the
+dialog actually close, with an honest 502 when it doesn't. Same discipline
+for the Other row: the typed words must appear in the field before Enter
+is pressed. The Echo card is never cleared optimistically either — an
+answer that silently failed used to take the card away while the terminal
+dialog stayed open, leaving the lane stuck with no way back in.
 
 *Performance — 65% → 12% idle CPU (same Debug build; ~5x), 2026-08-21.*
 Profiled with `sample(1)`, not guessed, and the guess in the To-Do was

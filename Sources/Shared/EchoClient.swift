@@ -630,6 +630,8 @@ final class EchoClient: ObservableObject {
         let header: String
         let question: String
         let options: [AskOption]
+        let multi: Bool?
+        var isMulti: Bool { multi ?? false }
     }
 
     struct AskInfo: Decodable, Equatable {
@@ -1356,19 +1358,38 @@ final class EchoClient: ObservableObject {
     /// (the server sends `down` × index, then Enter). Optimistically clears
     /// the card so the tap feels instant; the next status snapshot confirms.
     func answerAsk(lane: String, choice: Int) {
-        if var st = laneStates[lane] {
-            st = LaneStatusEntry(state: st.state, session: st.session, ts: st.ts,
-                                 links: st.links, confirm: st.confirm,
-                                 mode: st.mode, ask: nil)
-            laneStates[lane] = st
+        answerAsk(lane: lane, body: ["lane": lane, "choice": choice],
+                  what: "option \(choice + 1)")
+    }
+
+    /// Multi-select: every picked row gets toggled, then submitted.
+    func answerAsk(lane: String, choices: [Int]) {
+        guard !choices.isEmpty else { return }
+        answerAsk(lane: lane, body: ["lane": lane, "choices": choices.sorted()],
+                  what: "options \(choices.sorted().map { $0 + 1 })")
+    }
+
+    /// The "Other" row: his own words instead of one of the offered rows.
+    func answerAsk(lane: String, other: String) {
+        let text = other.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        answerAsk(lane: lane, body: ["lane": lane, "other": text], what: "other")
+    }
+
+    private func answerAsk(lane: String, body: [String: Any], what: String) {
+        // Clear the card optimistically so the tap feels instant; the next
+        // status snapshot (PostToolUse closes it) is the real confirmation.
+        if let st = laneStates[lane] {
+            laneStates[lane] = LaneStatusEntry(
+                state: st.state, session: st.session, ts: st.ts, links: st.links,
+                confirm: st.confirm, mode: st.mode, ask: nil)
         }
         Task { [weak self] in
             guard let self else { return }
             do {
-                let (code, data) = try await self.post(
-                    "/ask/answer", body: ["lane": lane, "choice": choice])
+                let (code, data) = try await self.post("/ask/answer", body: body)
                 if code == 204 {
-                    self.log.add("answered question with option \(choice + 1) (\(lane))")
+                    self.log.add("answered question with \(what) (\(lane))")
                 } else {
                     self.flashFeedback(Self.serverWhy(data) ?? "Answer failed (\(code)).")
                 }

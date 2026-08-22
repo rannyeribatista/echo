@@ -110,6 +110,12 @@ private struct AskStrip: View {
     let lane: String
     let ask: EchoClient.AskInfo
 
+    /// Rows toggled on for a multi-select question (indices into options).
+    @State private var picked: Set<Int> = []
+    /// The "Other" row's free text, when he'd rather answer in his own words.
+    @State private var other = ""
+    @State private var showingOther = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(ask.questions.enumerated()), id: \.offset) { qi, q in
@@ -132,12 +138,31 @@ private struct AskStrip: View {
                     // later one would land on the wrong list.
                     if qi == 0 {
                         ForEach(Array(q.options.enumerated()), id: \.offset) { oi, opt in
-                            Button { client.answerAsk(lane: lane, choice: oi) } label: {
+                            Button {
+                                if q.isMulti {
+                                    if picked.contains(oi) { picked.remove(oi) }
+                                    else { picked.insert(oi) }
+                                } else {
+                                    client.answerAsk(lane: lane, choice: oi)
+                                }
+                            } label: {
                                 HStack(alignment: .top, spacing: 8) {
-                                    Text("\(oi + 1)")
-                                        .font(.caption2.monospacedDigit().weight(.semibold))
-                                        .foregroundStyle(.secondary)
-                                        .frame(width: 14)
+                                    // Multi-select shows real checkboxes: the
+                                    // terminal is toggling rows with space, so
+                                    // the card must read as "pick several".
+                                    if q.isMulti {
+                                        Image(systemName: picked.contains(oi)
+                                              ? "checkmark.square.fill" : "square")
+                                            .foregroundStyle(picked.contains(oi)
+                                                             ? AnyShapeStyle(.tint)
+                                                             : AnyShapeStyle(.secondary))
+                                            .frame(width: 14)
+                                    } else {
+                                        Text("\(oi + 1)")
+                                            .font(.caption2.monospacedDigit().weight(.semibold))
+                                            .foregroundStyle(.secondary)
+                                            .frame(width: 14)
+                                    }
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(opt.label)
                                             .font(.callout)
@@ -166,12 +191,57 @@ private struct AskStrip: View {
                             }
                             .buttonStyle(.plain)
                         }
+                        if q.isMulti {
+                            Button {
+                                client.answerAsk(lane: lane, choices: Array(picked))
+                                picked = []
+                            } label: {
+                                Text(picked.isEmpty ? "Pick one or more"
+                                                    : "Send \(picked.count) answer\(picked.count == 1 ? "" : "s")")
+                                    .font(.caption.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                            .disabled(picked.isEmpty)
+                        }
+                        // The "Other" row the terminal always offers: his own
+                        // words instead of one of ours.
+                        if showingOther {
+                            HStack(spacing: 6) {
+                                TextField("Your own answer", text: $other)
+                                    .textFieldStyle(.plain)
+                                    .onSubmit(sendOther)
+                                Button(action: sendOther) {
+                                    Image(systemName: "arrow.up.circle.fill")
+                                        .foregroundStyle(other.isEmpty
+                                                         ? AnyShapeStyle(.tertiary)
+                                                         : AnyShapeStyle(.tint))
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(other.trimmingCharacters(in: .whitespaces).isEmpty)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .background(
+                                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                    .fill(Color.primary.opacity(0.05))
+                            )
+                        } else {
+                            Button("Something else…") { showingOther = true }
+                                .buttonStyle(.plain)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     } else {
                         Text("answer above first")
                             .font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
             }
+        }
+        .onChange(of: ask.id) { _ in          // a new question starts clean
+            picked = []; other = ""; showingOther = false
         }
         .padding(11)
         .background(
@@ -182,6 +252,14 @@ private struct AskStrip: View {
                         .stroke(Color.accentColor.opacity(0.22), lineWidth: 1)
                 )
         )
+    }
+
+    private func sendOther() {
+        let text = other.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        client.answerAsk(lane: lane, other: text)
+        other = ""
+        showingOther = false
     }
 }
 
